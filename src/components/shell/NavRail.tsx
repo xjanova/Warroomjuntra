@@ -31,6 +31,17 @@ const ITEMS: NavItem[] = [
     icon: <path d="M21 11.5a8.38 8.38 0 0 1-9 8.38 8.5 8.5 0 0 1-3.8-.9L3 21l1.9-5.2A8.38 8.38 0 0 1 21 11.5z" />,
   },
   {
+    key: 'eve',
+    href: '/eve',
+    label: 'Eve',
+    icon: (
+      <>
+        <path d="M12 2l1.5 4 4 1.5-4 1.5L12 13l-1.5-4-4-1.5 4-1.5z" />
+        <circle cx="12" cy="18" r="2" />
+      </>
+    ),
+  },
+  {
     key: 'predict',
     href: '/predict',
     label: 'ทำนาย',

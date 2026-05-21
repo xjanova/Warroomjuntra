@@ -25,6 +25,7 @@ export function CommandPalette() {
     () => [
       { id: 'go-war', title: 'ไปยัง · War Room', keywords: 'home dashboard', action: () => router.push('/') },
       { id: 'go-chat', title: 'ไปยัง · แชตสด / Takeover', keywords: 'chat takeover', action: () => router.push('/chat') },
+      { id: 'go-eve', title: 'ไปยัง · คุย Eve', keywords: 'eve ai assist', action: () => router.push('/eve') },
       { id: 'go-predict', title: 'ไปยัง · ทำนาย (Workbench)', keywords: 'predict ai prompt', action: () => router.push('/predict') },
       { id: 'go-bills', title: 'ไปยัง · บิล', keywords: 'bills invoice', action: () => router.push('/bills') },
       { id: 'go-payment', title: 'ไปยัง · กระทบยอดการเงิน', keywords: 'payment recon sms', action: () => router.push('/payment') },
