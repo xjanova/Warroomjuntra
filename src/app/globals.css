@@ -518,8 +518,8 @@ table.dense tbody tr.selected { background: rgba(34,211,238,.08); }
   --eye-y: 26%;
   --eyeL-x: 43%;
   --eyeR-x: 57%;
-  --eye-w: 14px;
-  --eye-h: 7px;
+  --eye-w: 9px;
+  --eye-h: 4px;
   --mouth-x: 50%;
   --mouth-y: 31%;
   --mouth-w: 18px;
