@@ -12,8 +12,8 @@ const H = 400;
 
 // New CSS variable values
 const EYE_Y = 0.26;
-const EYE_L_X = 0.43;
-const EYE_R_X = 0.57;
+const EYE_L_X = 0.45;
+const EYE_R_X = 0.55;
 const EYE_W = 9 * 2; // double-up since render is 2x
 const EYE_H = 4 * 2;
 const MOUTH_X = 0.50;

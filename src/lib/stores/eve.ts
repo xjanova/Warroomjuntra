@@ -40,8 +40,8 @@ export const useEve = create<EveState>((set) => ({
   // Calibrated against eve.svg artwork — full-body figure, face in top quarter.
   // User can fine-tune via the ⚙ button on Eve's header.
   eyeY: 26,
-  eyeLX: 43,
-  eyeRX: 57,
+  eyeLX: 45,
+  eyeRX: 55,
   mouthX: 50,
   mouthY: 31,
   setMode: (mode) => set({ mode }),

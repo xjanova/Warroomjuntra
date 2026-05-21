@@ -537,8 +537,8 @@ table.dense tbody tr.selected { background: rgba(34,211,238,.08); }
   /* Calibrated against eve.svg (full-body figure, face occupies top quarter).
      Tunable per-instance via React inline style on .eve-face. */
   --eye-y: 26%;
-  --eyeL-x: 43%;
-  --eyeR-x: 57%;
+  --eyeL-x: 45%;
+  --eyeR-x: 55%;
   --eye-w: 9px;
   --eye-h: 4px;
   --mouth-x: 50%;
