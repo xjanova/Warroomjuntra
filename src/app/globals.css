@@ -349,9 +349,18 @@ table.dense tbody tr.selected { background: rgba(34,211,238,.08); }
   flex-shrink: 0;
 }
 .eve-pill-port .eve-avatar-img {
-  position: absolute; inset: -8%;
-  width: 116%; height: 116%;
-  animation: eve-breath 3.6s ease-in-out infinite;
+  /* Zoom into the face — SVG face center is at (50%, 25%) of the figure.
+     Math: container = 44px; want face (32% of figure) to fill ~95% of circle
+     → scale figure to 312%, shift so face center lands on container center.
+       left = -106% (44*-1.06 = -46.64; img w=137.28; center at -46.64+68.64=22 ✓)
+       top  = -28%  (44*-0.28 = -12.32; img h=137.28; face-y at -12.32+34.32=22 ✓) */
+  position: absolute;
+  width: 312%;
+  height: 312%;
+  top: -28%;
+  left: -106%;
+  transform-origin: 50% 25%; /* scale around the face, not the image center */
+  animation: eve-breath-mini 3.6s ease-in-out infinite;
 }
 .eve-pill-meta { display: flex; flex-direction: column; line-height: 1.1; }
 .eve-pill-name {
@@ -410,11 +419,16 @@ table.dense tbody tr.selected { background: rgba(34,211,238,.08); }
     0 10px 30px rgba(0, 0, 0, .6);
 }
 .eve-launcher .eve-avatar-img {
-  width: 130%; height: 130%;
+  /* Same zoom-to-face strategy as the pill (see math above). */
+  position: absolute;
+  width: 312%;
+  height: 312%;
+  top: -28%;
+  left: -106%;
   object-fit: contain;
   filter: drop-shadow(0 4px 10px rgba(0, 0, 0, .5));
-  transform: translateY(4%);
-  animation: eve-breath 3.6s ease-in-out infinite;
+  transform-origin: 50% 25%;
+  animation: eve-breath-mini 3.6s ease-in-out infinite;
 }
 .eve-launcher-pulse {
   position: absolute; inset: -4px; border-radius: 50%;
@@ -425,6 +439,13 @@ table.dense tbody tr.selected { background: rgba(34,211,238,.08); }
 @keyframes eve-pulse {
   0% { transform: scale(.85); opacity: .9; }
   100% { transform: scale(1.3); opacity: 0; }
+}
+@keyframes eve-breath-mini {
+  /* Subtle breathing for the zoomed face portraits in pill + launcher.
+     Skip the translate(-50%, -50%) that the main .eve-avatar uses — these
+     elements are positioned via top/left, not flex-centered. */
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.028); }
 }
 @keyframes eve-launcher-pop {
   0% { transform: scale(0) rotate(-90deg); opacity: 0; }
