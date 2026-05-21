@@ -1,0 +1,69 @@
+# Warroom Juntra · static export .htaccess
+# Copied to public_html/.htaccess by deploy.sh.
+
+# ============================================================
+# Compression
+# ============================================================
+<IfModule mod_deflate.c>
+    AddOutputFilterByType DEFLATE text/html text/plain text/xml text/css text/javascript
+    AddOutputFilterByType DEFLATE application/javascript application/json application/xml
+    AddOutputFilterByType DEFLATE image/svg+xml
+</IfModule>
+
+# ============================================================
+# Cache static assets aggressively (Next.js content-hashed)
+# ============================================================
+<IfModule mod_expires.c>
+    ExpiresActive On
+    # Long cache for hashed assets
+    <FilesMatch "\.(woff2?|ttf|otf|eot)$">
+        ExpiresDefault "access plus 1 year"
+        Header set Cache-Control "public, immutable, max-age=31536000"
+    </FilesMatch>
+    <FilesMatch "\.(png|jpg|jpeg|gif|webp|svg|ico)$">
+        ExpiresDefault "access plus 30 days"
+    </FilesMatch>
+    <FilesMatch "\.(css|js)$">
+        ExpiresDefault "access plus 30 days"
+        Header set Cache-Control "public, max-age=2592000"
+    </FilesMatch>
+    # HTML — short cache so deploys are picked up quickly
+    <FilesMatch "\.html$">
+        ExpiresDefault "access plus 5 minutes"
+        Header set Cache-Control "public, max-age=300, must-revalidate"
+    </FilesMatch>
+</IfModule>
+
+# ============================================================
+# Security headers
+# ============================================================
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+    Header set X-Frame-Options "SAMEORIGIN"
+    Header set Referrer-Policy "strict-origin-when-cross-origin"
+    Header set Permissions-Policy "camera=(), microphone=(), geolocation=()"
+</IfModule>
+
+# ============================================================
+# Pretty URL rewrites (Next.js trailingSlash export)
+# ============================================================
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /
+
+    # Strip trailing slash from real files (e.g. /foo/ that should hit /foo.html)
+    # — Next.js already emits /foo/index.html so this is mostly belt+suspenders.
+    # If /<path>/ is requested and /<path>/index.html exists, serve it.
+    RewriteCond %{REQUEST_FILENAME}/index.html -f
+    RewriteRule ^(.+?)/?$ /$1/index.html [L]
+
+    # Fall back to a fresh / when a non-existent path is hit (SPA behaviour disabled —
+    # static export gives us real HTML per route; if you hit something that doesn't
+    # exist, Next.js emitted 404.html — serve it as the not-found page).
+    ErrorDocument 404 /404.html
+</IfModule>
+
+# ============================================================
+# Prevent directory listing
+# ============================================================
+Options -Indexes

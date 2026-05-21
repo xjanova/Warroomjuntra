@@ -1,0 +1,113 @@
+'use client';
+
+import { useState } from 'react';
+import { BOT_CARDS, BOT_STATS } from '@/lib/mock/bots-page';
+import { Switch } from '@/components/ui/Switch';
+import { Pill } from '@/components/ui/Pill';
+import { useWarroom } from '@/lib/stores/warroom';
+
+export default function BotsPage() {
+  const [bots, setBots] = useState(BOT_CARDS);
+  const pushToast = useWarroom((s) => s.pushToast);
+  const enabledCount = bots.filter((b) => b.enabled).length;
+
+  const setEnabled = (id: number, enabled: boolean) =>
+    setBots((arr) => arr.map((b) => (b.id === id ? { ...b, enabled } : b)));
+
+  const emergencyStop = () => {
+    if (window.confirm('หยุดบอทอัตโนมัติทั้งหมดทันที?')) {
+      setBots((arr) => arr.map((b) => ({ ...b, enabled: false })));
+      pushToast({ kind: 'crit', title: '🛑 หยุดบอททั้งหมด', body: `${bots.length} ตัว` });
+    }
+  };
+
+  return (
+    <div className="flex flex-col h-full min-h-0">
+      <header className="h-12 flex items-center border-b border-line bg-panel2/40 px-3 gap-3 shrink-0">
+        <span className="dot dot-ok" />
+        <span className="t-h">บอท / อัตโนมัติ · BOTS</span>
+        <Pill tone="info">{enabledCount} / {bots.length} เปิด</Pill>
+        <div className="flex-1" />
+        <button onClick={emergencyStop} className="btn btn-crit">🛑 หยุดทั้งหมดฉุกเฉิน</button>
+      </header>
+
+      <section className="px-3 py-2 border-b border-line shrink-0">
+        <div className="grid grid-cols-5 gap-2">
+          {BOT_STATS.map((s) => (
+            <div key={s.label} className="panel px-3 py-2">
+              <div className="t-h">{s.label}</div>
+              <div className="mono text-2xl font-semibold mt-1" style={{ color: s.color }}>
+                {s.dyn ? enabledCount : s.value}
+              </div>
+              {s.sub && <div className="text-2xs text-mute mt-0.5">{s.sub}</div>}
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <main
+        className="flex-1 p-3 grid gap-3 min-h-0 overflow-y-auto"
+        style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))' }}
+      >
+        {bots.map((b) => (
+          <div
+            key={b.id}
+            className={`panel relative overflow-hidden ${
+              b.state === 'warn' ? 'border-warn/40' : b.state === 'crit' ? 'border-crit/40' : ''
+            }`}
+          >
+            <div className="p-3 border-b border-line">
+              <div className="flex items-start gap-2">
+                <div
+                  className="w-9 h-9 rounded grid place-items-center shrink-0"
+                  style={{ background: `${b.color}22`, border: `1px solid ${b.color}44`, color: b.color }}
+                >
+                  <span className="text-base">{b.icon}</span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-semibold text-fg truncate">{b.name}</span>
+                    <span className={`dot dot-${b.state}`} />
+                  </div>
+                  <div className="text-2xs text-mute mt-0.5">{b.desc}</div>
+                </div>
+                <Switch checked={b.enabled} onChange={(v) => setEnabled(b.id, v)} />
+              </div>
+            </div>
+            <div className="p-3 grid grid-cols-2 gap-2 text-xs">
+              <div>
+                <div className="text-mute text-2xs">รอบถัดไป</div>
+                <div className="mono text-fg">{b.next}</div>
+              </div>
+              <div>
+                <div className="text-mute text-2xs">รอบล่าสุด</div>
+                <div className={`mono ${b.state === 'ok' ? 'text-ok' : 'text-warn'}`}>{b.last}</div>
+              </div>
+              <div>
+                <div className="text-mute text-2xs">สำเร็จ</div>
+                <div className="mono text-ok">{b.success}%</div>
+              </div>
+              <div>
+                <div className="text-mute text-2xs">รัน 7 วัน</div>
+                <div className="mono text-fg">{b.runs7d}</div>
+              </div>
+            </div>
+            <div className="px-3 pb-3">
+              <svg className="w-full" width="100%" height={32} viewBox="0 0 200 32" preserveAspectRatio="none">
+                <path d={b.spark} fill="none" stroke={b.color} strokeWidth={1.5} strokeLinejoin="round" />
+                <path d={`${b.spark} L 200 32 L 0 32 Z`} fill={b.color} opacity={0.1} />
+              </svg>
+            </div>
+            <div className="px-3 pb-3 flex gap-1">
+              <button className="btn flex-1 justify-center" onClick={() => pushToast({ kind: 'info', title: 'รันบอท', body: b.name })}>
+                ▶ รันเลย
+              </button>
+              <button className="btn flex-1 justify-center">📜 log</button>
+              <button className="btn flex-1 justify-center">⚙ แก้</button>
+            </div>
+          </div>
+        ))}
+      </main>
+    </div>
+  );
+}
