@@ -37,12 +37,13 @@ export const useEve = create<EveState>((set) => ({
   mood: 'idle',
   typing: false,
   messages: [],
-  // defaults — tuned to portrait artwork; can be overridden via Settings
-  eyeY: 50,
-  eyeLX: 41,
-  eyeRX: 59,
+  // Calibrated against eve.svg artwork — full-body figure, face in top quarter.
+  // User can fine-tune via the ⚙ button on Eve's header.
+  eyeY: 26,
+  eyeLX: 43,
+  eyeRX: 57,
   mouthX: 50,
-  mouthY: 64,
+  mouthY: 31,
   setMode: (mode) => set({ mode }),
   setMood: (mood) => set({ mood }),
   setTyping: (typing) => set({ typing }),

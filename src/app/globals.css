@@ -513,24 +513,27 @@ table.dense tbody tr.selected { background: rgba(34,211,238,.08); }
 .eve-face {
   position: absolute; inset: 0;
   pointer-events: none;
-  --eye-y: 41%;
+  /* Calibrated against eve.svg (full-body figure, face occupies top quarter).
+     Tunable per-instance via React inline style on .eve-face. */
+  --eye-y: 26%;
   --eyeL-x: 43%;
   --eyeR-x: 57%;
-  --eye-w: 12px;
-  --eye-h: 4px;
+  --eye-w: 14px;
+  --eye-h: 7px;
   --mouth-x: 50%;
-  --mouth-y: 56%;
-  --mouth-w: 22px;
+  --mouth-y: 31%;
+  --mouth-w: 18px;
 }
 
 .eve-eye {
   position: absolute;
   width: var(--eye-w); height: var(--eye-h);
-  background: #1a1330;
+  /* Dark brown matching the artwork's eye color so the static state blends. */
+  background: #2b1810;
   border-radius: 50%;
   top: var(--eye-y);
   transform: translate(-50%, -50%);
-  box-shadow: 0 0 4px rgba(139, 92, 246, .5);
+  box-shadow: 0 0 3px rgba(139, 92, 246, .35);
   animation: eve-blink 5.2s infinite;
 }
 .eve-eye.l { left: var(--eyeL-x); }
