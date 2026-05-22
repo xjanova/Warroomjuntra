@@ -1,25 +1,65 @@
 'use client';
 
-import { useState } from 'react';
-import { BOT_CARDS, BOT_STATS } from '@/lib/mock/bots-page';
+import { useEffect, useState } from 'react';
+import { BOT_CARDS, BOT_STATS, type BotCard } from '@/lib/mock/bots-page';
 import { Switch } from '@/components/ui/Switch';
 import { Pill } from '@/components/ui/Pill';
+import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { useWarroom } from '@/lib/stores/warroom';
+import { useAdminData, fetchAiBots, toggleAiBot, describeError } from '@/lib/api';
+import { aiBotToBotCardFull } from '@/lib/adapters/bots-page';
 
 export default function BotsPage() {
-  const [bots, setBots] = useState(BOT_CARDS);
   const pushToast = useWarroom((s) => s.pushToast);
+
+  const live = useAdminData<BotCard[]>({
+    key: 'bots-page',
+    fetcher: async () => {
+      const res = await fetchAiBots({ per_page: 30 });
+      return res.data.map((b, i) => aiBotToBotCardFull(b, i));
+    },
+    mock: BOT_CARDS,
+  });
+
+  const [bots, setBots] = useState<BotCard[]>(live.data);
+  useEffect(() => setBots(live.data), [live.data]);
   const enabledCount = bots.filter((b) => b.enabled).length;
 
-  const setEnabled = (id: number, enabled: boolean) =>
+  async function setEnabled(id: number, enabled: boolean) {
     setBots((arr) => arr.map((b) => (b.id === id ? { ...b, enabled } : b)));
-
-  const emergencyStop = () => {
-    if (window.confirm('หยุดบอทอัตโนมัติทั้งหมดทันที?')) {
-      setBots((arr) => arr.map((b) => ({ ...b, enabled: false })));
-      pushToast({ kind: 'crit', title: '🛑 หยุดบอททั้งหมด', body: `${bots.length} ตัว` });
+    if (live.source !== 'live') return;
+    try {
+      await toggleAiBot(id);
+      void live.refetch();
+    } catch (e) {
+      setBots((arr) => arr.map((b) => (b.id === id ? { ...b, enabled: !enabled } : b)));
+      pushToast({ kind: 'crit', title: 'สลับบอทไม่สำเร็จ', body: describeError(e) });
     }
-  };
+  }
+
+  async function emergencyStop() {
+    if (!window.confirm('หยุดบอทอัตโนมัติทั้งหมดทันที?')) return;
+    if (live.source !== 'live') {
+      setBots((arr) => arr.map((b) => ({ ...b, enabled: false })));
+      pushToast({ kind: 'crit', title: '🛑 หยุดบอททั้งหมด (mock)', body: `${bots.length} ตัว` });
+      return;
+    }
+    const targets = bots.filter((b) => b.enabled);
+    let failed = 0;
+    for (const b of targets) {
+      try {
+        await toggleAiBot(b.id);
+      } catch {
+        failed += 1;
+      }
+    }
+    pushToast({
+      kind: 'crit',
+      title: failed ? `หยุดบางส่วน — ล้มเหลว ${failed}` : '🛑 หยุดบอททั้งหมด',
+      body: `${targets.length - failed} / ${targets.length}`,
+    });
+    void live.refetch();
+  }
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -27,6 +67,7 @@ export default function BotsPage() {
         <span className="dot dot-ok" />
         <span className="t-h">บอท / อัตโนมัติ · BOTS</span>
         <Pill tone="info">{enabledCount} / {bots.length} เปิด</Pill>
+        <DataSourceBadge source={live.source} isLoading={live.isLoading} error={live.error} />
         <div className="flex-1" />
         <button onClick={emergencyStop} className="btn btn-crit">🛑 หยุดทั้งหมดฉุกเฉิน</button>
       </header>
@@ -107,6 +148,9 @@ export default function BotsPage() {
             </div>
           </div>
         ))}
+        {bots.length === 0 && (
+          <div className="col-span-full text-center text-2xs text-mute p-12">ยังไม่มีบอทในระบบ</div>
+        )}
       </main>
     </div>
   );

@@ -3,6 +3,7 @@
 import { useEffect } from 'react';
 import { Search, Pause, Play, VolumeX, Volume2, Focus, Maximize2 } from 'lucide-react';
 import { useWarroom } from '@/lib/stores/warroom';
+import { useSettings } from '@/lib/stores/settings';
 import { Kbd } from '@/components/ui/Kbd';
 import { formatClock, formatThaiDate, cn } from '@/lib/utils';
 
@@ -22,6 +23,7 @@ export function TopBar() {
     setRefreshInterval,
     setCmdkOpen,
   } = useWarroom();
+  const setPersistedRefresh = useSettings((s) => s.setRefreshInterval);
 
   // tick every second
   useEffect(() => {
@@ -83,7 +85,11 @@ export function TopBar() {
         <span>รีเฟรช</span>
         <select
           value={refreshInterval}
-          onChange={(e) => setRefreshInterval(Number(e.target.value) as 2 | 5 | 10 | 30)}
+          onChange={(e) => {
+            const v = Number(e.target.value) as 2 | 5 | 10 | 30;
+            setRefreshInterval(v);
+            setPersistedRefresh(v);
+          }}
           className="bg-panel border border-line rounded text-xs px-1.5 py-0.5 text-fg"
         >
           <option value={2}>2 วิ</option>

@@ -1,16 +1,33 @@
 'use client';
 
 import Link from 'next/link';
+import { useEffect, useState } from 'react';
 import { Pill } from '@/components/ui/Pill';
+import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { CHATS } from '@/lib/mock/warroom';
 import { Switch } from '@/components/ui/Switch';
-import { useState } from 'react';
 import { formatSilent } from '@/lib/helpers';
+import { useFortuneFeed } from '@/lib/api';
+import { readingToChat } from '@/lib/adapters/livechats';
+import { useMemo } from 'react';
+import type { Chat } from '@/lib/mock/types';
 
 export function LiveChats() {
+  const feed = useFortuneFeed();
+  const chats = useMemo<Chat[]>(() => {
+    if (feed.source === 'mock' || (feed.source === 'loading' && feed.data.length === 0)) {
+      return CHATS;
+    }
+    return feed.data.slice(0, 12).map(readingToChat);
+  }, [feed.data, feed.source]);
+  const live = { ...feed, data: chats };
+
   const [botFlags, setBotFlags] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(CHATS.map((c) => [c.id, c.bot])),
+    Object.fromEntries(live.data.map((c) => [c.id, c.bot]))
   );
+  useEffect(() => {
+    setBotFlags(Object.fromEntries(live.data.map((c) => [c.id, c.bot])));
+  }, [live.data]);
 
   return (
     <section className="panel flex flex-col min-h-0">
@@ -18,14 +35,15 @@ export function LiveChats() {
         <div className="title">
           <span className="dot dot-info" />
           <span className="t-h">แชตสด · LIVE CHATS</span>
-          <Pill tone="info">{CHATS.length} active</Pill>
+          <Pill tone="info">{live.data.length} active</Pill>
+          <DataSourceBadge source={live.source} isLoading={live.isLoading} error={live.error} />
         </div>
         <Link href="/chat" className="btn btn-info">
           เปิดหน้าแชต →
         </Link>
       </header>
       <div className="overflow-y-auto flex-1 min-h-0">
-        {CHATS.map((ch) => (
+        {live.data.map((ch) => (
           <Link
             key={ch.id}
             href={`/chat?id=${ch.id}`}
@@ -77,6 +95,9 @@ export function LiveChats() {
             </div>
           </Link>
         ))}
+        {live.data.length === 0 && (
+          <div className="p-6 text-center text-2xs text-mute">ยังไม่มีแชตในตอนนี้</div>
+        )}
       </div>
     </section>
   );

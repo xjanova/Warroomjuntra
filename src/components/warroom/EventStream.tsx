@@ -3,8 +3,12 @@
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { Pill } from '@/components/ui/Pill';
+import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { EVENTS, EVENT_FILTERS } from '@/lib/mock/warroom';
+import { useFortuneFeed } from '@/lib/api';
+import { readingsToEvents } from '@/lib/adapters/events';
 import { cn } from '@/lib/utils';
+import type { EventItem } from '@/lib/mock/types';
 
 const KIND_TO_FILTER: Record<string, string> = {
   'PAY OK': 'payment',
@@ -19,14 +23,25 @@ const KIND_TO_FILTER: Record<string, string> = {
 
 export function EventStream() {
   const [active, setActive] = useState<string[]>(['payment', 'reading', 'sensitive', 'system']);
+
+  const feed = useFortuneFeed();
+  const events = useMemo<EventItem[]>(() => {
+    if (feed.source === 'mock' || (feed.source === 'loading' && feed.data.length === 0)) {
+      return EVENTS;
+    }
+    return readingsToEvents(feed.data);
+  }, [feed.data, feed.source]);
+  const live = { ...feed, data: events };
+
   const filtered = useMemo(
     () =>
-      EVENTS.filter((ev) => {
+      events.filter((ev) => {
         const k = KIND_TO_FILTER[ev.kind] ?? 'audit';
         return active.includes(k);
       }),
-    [active],
+    [active, events]
   );
+
   const toggle = (k: string) =>
     setActive((s) => (s.includes(k) ? s.filter((x) => x !== k) : [...s, k]));
 
@@ -39,7 +54,8 @@ export function EventStream() {
         <div className="title">
           <span className="dot dot-info" />
           <span className="t-h">ฟีดเหตุการณ์สด · EVENT STREAM</span>
-          <Pill tone="info">+{EVENTS.length} ใหม่/นาที</Pill>
+          <Pill tone="info">{live.data.length} รายการ</Pill>
+          <DataSourceBadge source={live.source} isLoading={live.isLoading} error={live.error} />
         </div>
         <div className="flex items-center gap-1.5">
           {EVENT_FILTERS.map((f) => (
@@ -65,6 +81,9 @@ export function EventStream() {
             <span className="text-mute shrink-0">{ev.ref}</span>
           </div>
         ))}
+        {filtered.length === 0 && (
+          <div className="p-6 text-center text-mute">ไม่มีเหตุการณ์ตรงตัวกรอง</div>
+        )}
       </div>
     </section>
   );

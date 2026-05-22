@@ -3,6 +3,9 @@
 import { useMemo, useState } from 'react';
 import { CUSTOMERS, type CustomerCard, type Rarity } from '@/lib/mock/customers';
 import { ChannelChip, Pill } from '@/components/ui/Pill';
+import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
+import { useAdminData, fetchUsers, fetchUserStats, type AdminUserStats } from '@/lib/api';
+import { userToCustomerCard } from '@/lib/adapters/customers';
 
 type SortKey = 'ltv' | 'recent' | 'readings';
 
@@ -22,8 +25,27 @@ export default function CustomersPage() {
   const [vipOnly, setVipOnly] = useState(false);
   const [problemOnly, setProblemOnly] = useState(false);
 
+  const live = useAdminData<CustomerCard[]>({
+    key: 'customers-page',
+    fetcher: async () => {
+      const res = await fetchUsers({
+        per_page: 60,
+        search: search || undefined,
+        blocked: problemOnly || undefined,
+      });
+      return res.data.map(userToCustomerCard);
+    },
+    mock: CUSTOMERS,
+  });
+
+  const stats = useAdminData<AdminUserStats | null>({
+    key: 'customers-stats',
+    fetcher: () => fetchUserStats(),
+    mock: null,
+  });
+
   const filtered: CustomerCard[] = useMemo(() => {
-    const r = CUSTOMERS.filter((c) => {
+    const r = live.data.filter((c) => {
       if (chan && c.channel !== chan) return false;
       if (rarity && c.rarity !== rarity) return false;
       if (vipOnly && !c.vip) return false;
@@ -34,14 +56,24 @@ export default function CustomersPage() {
     if (sort === 'ltv') r.sort((a, b) => b.ltv - a.ltv);
     else if (sort === 'readings') r.sort((a, b) => b.readings - a.readings);
     return r;
-  }, [search, chan, rarity, sort, vipOnly, problemOnly]);
+  }, [live.data, search, chan, rarity, sort, vipOnly, problemOnly]);
 
   return (
     <div className="flex flex-col h-full min-h-0">
       <header className="h-12 flex items-center border-b border-line bg-panel2/40 px-3 gap-3 shrink-0">
         <span className="dot dot-info" />
         <span className="t-h">ลูกค้า · CUSTOMERS</span>
-        <Pill tone="info">{CUSTOMERS.length} แสดง · 2,481 รวม</Pill>
+        <Pill tone="info">
+          {filtered.length} แสดง
+          {stats.data ? ` · ${stats.data.total.toLocaleString()} รวม` : ''}
+        </Pill>
+        <DataSourceBadge source={live.source} isLoading={live.isLoading} error={live.error} />
+        {stats.data && (
+          <span className="text-2xs text-mute mono">
+            active {stats.data.active.toLocaleString()} · blocked {stats.data.blocked} · ใหม่วันนี้{' '}
+            {stats.data.new_today}
+          </span>
+        )}
       </header>
 
       <div className="px-3 py-2 border-b border-line flex items-center gap-2 shrink-0">

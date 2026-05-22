@@ -3,8 +3,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { EVENT_TOGGLES, FULL_EVENTS, type FullEvent } from '@/lib/mock/events-page';
 import { ChannelChip, Pill } from '@/components/ui/Pill';
+import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { cn } from '@/lib/utils';
 import { useWarroom } from '@/lib/stores/warroom';
+import { useFortuneFeed } from '@/lib/api';
+import { readingsToFullEvents } from '@/lib/adapters/events-page';
 
 const SAMPLES: Pick<FullEvent, 'kind' | 'tone' | 'category' | 'channel' | 'msg'>[] = [
   { kind: 'PAY OK', tone: 'ok', category: 'payment', channel: 'FB', msg: 'รับโอน ฿299 · บิลใหม่' },
@@ -14,6 +17,10 @@ const SAMPLES: Pick<FullEvent, 'kind' | 'tone' | 'category' | 'channel' | 'msg'>
 ];
 
 export default function EventsPage() {
+  const feed = useFortuneFeed();
+  const fromApi = useMemo<FullEvent[]>(() => readingsToFullEvents(feed.data), [feed.data]);
+
+  // When mock or empty live → stream synthetic events for demo. When live and has data → use it.
   const [items, setItems] = useState<FullEvent[]>(FULL_EVENTS);
   const [live, setLive] = useState(true);
   const [filter, setFilter] = useState('');
@@ -28,8 +35,17 @@ export default function EventsPage() {
   ]);
   const frozen = useWarroom((s) => s.frozen);
 
+  // Replace items with live data when available
+  useEffect(() => {
+    if (feed.source === 'live' && fromApi.length > 0) {
+      setItems(fromApi);
+    }
+  }, [feed.source, fromApi]);
+
+  // Demo stream only when not paired (mock mode)
   useEffect(() => {
     if (!live || frozen) return;
+    if (feed.source === 'live') return; // real data drives the list; don't fabricate
     const id = setInterval(() => {
       const sample = SAMPLES[Math.floor(Math.random() * SAMPLES.length)];
       const d = new Date();
@@ -43,7 +59,7 @@ export default function EventsPage() {
       setItems((arr) => [ev, ...arr].slice(0, 100));
     }, 2000);
     return () => clearInterval(id);
-  }, [live, frozen]);
+  }, [live, frozen, feed.source]);
 
   const toggle = (k: FullEvent['category']) =>
     setActive((s) => (s.includes(k) ? s.filter((x) => x !== k) : [...s, k]));
@@ -68,6 +84,7 @@ export default function EventsPage() {
         <span className="dot dot-info" />
         <span className="t-h">อีเวนต์ / log · EVENT STREAM</span>
         <Pill tone={live && !frozen ? 'crit' : 'dim'}>{live && !frozen ? '🔴 LIVE' : '⏸ หยุด'}</Pill>
+        <DataSourceBadge source={feed.source} isLoading={feed.isLoading} error={feed.error} />
         <div className="flex-1" />
         <button onClick={() => setLive((v) => !v)} className={live ? 'btn btn-crit' : 'btn'}>
           {live ? '⏸ หยุดสตรีม' : '▶ สตรีมสด'}

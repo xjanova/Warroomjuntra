@@ -2,9 +2,13 @@
 
 import { useMemo, useState } from 'react';
 import { Pill } from '@/components/ui/Pill';
+import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { ALL_CASES } from '@/lib/mock/warroom';
 import { severityColor, typeMeta } from '@/lib/helpers';
 import { useWarroom } from '@/lib/stores/warroom';
+import { useSettings } from '@/lib/stores/settings';
+import { useFortuneFeed } from '@/lib/api';
+import { readingToTriageCase } from '@/lib/adapters/triage';
 import { FollowupStrip } from './FollowupStrip';
 import type { TriageCase } from '@/lib/mock/types';
 
@@ -27,17 +31,29 @@ export function TriageQueue() {
 
   const openCaseDrawer = useWarroom((s) => s.openCaseDrawer);
   const pushToast = useWarroom((s) => s.pushToast);
+  const sla = useSettings((s) => s.sla);
+
+  const feed = useFortuneFeed();
+  const allCases = useMemo<TriageCase[]>(() => {
+    if (feed.source === 'mock' || (feed.source === 'loading' && feed.data.length === 0)) {
+      return ALL_CASES;
+    }
+    return feed.data
+      .filter((r) => r.response_type === 'pending' || !r.responded_at)
+      .map((r) => readingToTriageCase(r, sla));
+  }, [feed.data, feed.source, sla]);
+  const live = feed; // alias for header badge
 
   const cases = useMemo(() => {
-    return ALL_CASES.filter((c) => {
+    return allCases.filter((c) => {
       if (typeFilter && c.type !== typeFilter) return false;
       if (filter && !(c.customer + c.detail).toLowerCase().includes(filter.toLowerCase())) return false;
       return true;
     });
-  }, [filter, typeFilter]);
+  }, [filter, typeFilter, allCases]);
 
-  const critCount = useMemo(() => ALL_CASES.filter((c) => c.severity === 'crit').length, []);
-  const warnCount = useMemo(() => ALL_CASES.filter((c) => c.severity === 'warn').length, []);
+  const critCount = useMemo(() => allCases.filter((c) => c.severity === 'crit').length, [allCases]);
+  const warnCount = useMemo(() => allCases.filter((c) => c.severity === 'warn').length, [allCases]);
 
   const claim = (c: TriageCase) => {
     setClaimed((s) => ({ ...s, [c.id]: { initial: 'AN', color: '#22d3ee' } }));
@@ -55,7 +71,8 @@ export function TriageQueue() {
           <span className="t-h">คิวเร่งด่วน · TRIAGE</span>
           <Pill tone="crit">{critCount} วิกฤต</Pill>
           <Pill tone="warn">{warnCount} เตือน</Pill>
-          <Pill tone="dim">{ALL_CASES.length} ทั้งหมด</Pill>
+          <Pill tone="dim">{allCases.length} ทั้งหมด</Pill>
+          <DataSourceBadge source={live.source} isLoading={live.isLoading} error={live.error} />
         </div>
         <div className="flex items-center gap-1.5">
           <input

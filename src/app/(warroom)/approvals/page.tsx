@@ -1,16 +1,87 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { APPROVAL_ITEMS, APPROVAL_STATS, APPROVAL_TABS, type ApprovalItem } from '@/lib/mock/approvals-page';
 import { ChannelChip, Pill } from '@/components/ui/Pill';
+import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { useWarroom } from '@/lib/stores/warroom';
+import {
+  useAdminData,
+  fetchPendingWithdrawals,
+  approveWithdrawal,
+  rejectWithdrawal,
+  describeError,
+} from '@/lib/api';
+import { withdrawalToApprovalItem } from '@/lib/adapters/approvals-page';
 
 export default function ApprovalsPage() {
-  const [items, setItems] = useState(APPROVAL_ITEMS);
+  const live = useAdminData<ApprovalItem[]>({
+    key: 'approvals-page-withdrawals',
+    fetcher: async () => {
+      const res = await fetchPendingWithdrawals();
+      const list = Array.isArray(res) ? res : res.data;
+      return list.map(withdrawalToApprovalItem);
+    },
+    mock: APPROVAL_ITEMS,
+  });
+
+  // Local copy lets us optimistically remove items after approve/reject.
+  // Resets whenever upstream data changes.
+  const [items, setItems] = useState(live.data);
+  useEffect(() => setItems(live.data), [live.data]);
+
   const [tab, setTab] = useState<string>('all');
-  const [active, setActive] = useState<ApprovalItem | null>(items[0]);
+  const [active, setActive] = useState<ApprovalItem | null>(null);
+  useEffect(() => {
+    if (!active && items.length) setActive(items[0]);
+    if (active && !items.find((i) => i.id === active.id)) setActive(items[0] ?? null);
+  }, [items, active]);
   const [picked, setPicked] = useState<Record<string, boolean>>({});
   const pushToast = useWarroom((s) => s.pushToast);
+
+  const tabs = useMemo(() => {
+    const count = (kind: string) =>
+      kind === 'all' ? items.length : items.filter((i) => i.kind === kind).length;
+    return APPROVAL_TABS.map((t) => ({
+      ...t,
+      count: t.k === 'all' ? items.length : count(t.k.toUpperCase()),
+    }));
+  }, [items]);
+
+  async function performAction(it: ApprovalItem, action: 'approve' | 'reject') {
+    if (live.source !== 'live' || !it.id.startsWith('wd-')) {
+      // mock or non-withdrawal item — UI-only
+      setItems((arr) => arr.filter((i) => i.id !== it.id));
+      setActive((a) => (a?.id === it.id ? null : a));
+      pushToast({
+        kind: action === 'approve' ? 'ok' : 'crit',
+        title: action === 'approve' ? 'อนุมัติแล้ว (mock)' : 'ปฏิเสธแล้ว (mock)',
+        body: it.title,
+      });
+      return;
+    }
+    const numericId = it.id.replace(/^wd-/, '');
+    try {
+      if (action === 'approve') {
+        await approveWithdrawal(numericId);
+        pushToast({ kind: 'ok', title: 'อนุมัติถอนเงินแล้ว', body: it.title });
+      } else {
+        const reason = prompt('เหตุผลที่ปฏิเสธ?') ?? '';
+        if (!reason.trim()) return;
+        await rejectWithdrawal(numericId, reason);
+        pushToast({ kind: 'crit', title: 'ปฏิเสธคำขอแล้ว', body: it.title });
+      }
+      setItems((arr) => arr.filter((i) => i.id !== it.id));
+      setActive((a) => (a?.id === it.id ? null : a));
+      void live.refetch();
+    } catch (e) {
+      pushToast({
+        kind: 'crit',
+        title: action === 'approve' ? 'อนุมัติไม่สำเร็จ' : 'ปฏิเสธไม่สำเร็จ',
+        body: describeError(e),
+      });
+    }
+  }
 
   const filtered = useMemo(() => {
     if (tab === 'all') return items;
@@ -23,17 +94,23 @@ export default function ApprovalsPage() {
     [picked],
   );
 
-  const removeMany = (ids: string[]) => {
-    setItems((arr) => arr.filter((i) => !ids.includes(i.id)));
-    if (active && ids.includes(active.id)) setActive(null);
+  async function bulkAction(action: 'approve' | 'reject') {
+    const ids = filtered.filter((i) => picked[i.id]).map((i) => i.id);
+    if (!ids.length) return;
+    for (const id of ids) {
+      const it = items.find((i) => i.id === id);
+      if (it) await performAction(it, action);
+    }
     setPicked({});
-  };
+  }
 
   return (
     <div className="flex flex-col h-full min-h-0">
       <header className="h-12 flex items-center border-b border-line bg-panel2/40 px-3 gap-3 shrink-0">
         <span className="dot dot-ok" />
         <span className="t-h">อนุมัติรายการ · APPROVALS</span>
+        <DataSourceBadge source={live.source} isLoading={live.isLoading} error={live.error} />
+        {live.error && <span className="text-2xs text-crit mono">{live.error}</span>}
       </header>
 
       <section className="px-3 py-2 border-b border-line shrink-0">
@@ -51,7 +128,7 @@ export default function ApprovalsPage() {
       </section>
 
       <div className="px-3 border-b border-line flex items-center gap-1 shrink-0">
-        {APPROVAL_TABS.map((t) => (
+        {tabs.map((t) => (
           <button
             key={t.k}
             onClick={() => setTab(t.k)}
@@ -66,24 +143,14 @@ export default function ApprovalsPage() {
         <div className="flex-1" />
         <span className="text-2xs text-mute">{selectedCount} เลือก</span>
         <button
-          onClick={() => {
-            const ids = filtered.filter((i) => picked[i.id]).map((i) => i.id);
-            if (!ids.length) return;
-            removeMany(ids);
-            pushToast({ kind: 'ok', title: 'อนุมัติแล้ว', body: `${ids.length} รายการ` });
-          }}
+          onClick={() => bulkAction('approve')}
           disabled={!selectedCount}
           className="btn btn-ok disabled:opacity-30"
         >
           ✓ อนุมัติที่เลือก
         </button>
         <button
-          onClick={() => {
-            const ids = filtered.filter((i) => picked[i.id]).map((i) => i.id);
-            if (!ids.length) return;
-            removeMany(ids);
-            pushToast({ kind: 'crit', title: 'ปฏิเสธแล้ว', body: `${ids.length} รายการ` });
-          }}
+          onClick={() => bulkAction('reject')}
           disabled={!selectedCount}
           className="btn btn-crit disabled:opacity-30"
         >
@@ -149,22 +216,10 @@ export default function ApprovalsPage() {
                   <td className="mono text-2xs text-mute">{it.when}</td>
                   <td className="text-xs text-mystic">{it.by}</td>
                   <td onClick={(e) => e.stopPropagation()} className="text-right space-x-1">
-                    <button
-                      className="btn btn-ok"
-                      onClick={() => {
-                        removeMany([it.id]);
-                        pushToast({ kind: 'ok', title: 'อนุมัติแล้ว', body: it.title });
-                      }}
-                    >
+                    <button className="btn btn-ok" onClick={() => performAction(it, 'approve')}>
                       ✓
                     </button>
-                    <button
-                      className="btn btn-crit"
-                      onClick={() => {
-                        removeMany([it.id]);
-                        pushToast({ kind: 'crit', title: 'ปฏิเสธ', body: it.title });
-                      }}
-                    >
+                    <button className="btn btn-crit" onClick={() => performAction(it, 'reject')}>
                       ✕
                     </button>
                   </td>
@@ -215,19 +270,13 @@ export default function ApprovalsPage() {
               <div className="grid grid-cols-2 gap-2">
                 <button
                   className="btn btn-ok justify-center py-2"
-                  onClick={() => {
-                    removeMany([active.id]);
-                    pushToast({ kind: 'ok', title: 'อนุมัติแล้ว', body: active.title });
-                  }}
+                  onClick={() => performAction(active, 'approve')}
                 >
                   ✓ อนุมัติ
                 </button>
                 <button
                   className="btn btn-crit justify-center py-2"
-                  onClick={() => {
-                    removeMany([active.id]);
-                    pushToast({ kind: 'crit', title: 'ปฏิเสธ', body: active.title });
-                  }}
+                  onClick={() => performAction(active, 'reject')}
                 >
                   ✕ ปฏิเสธ
                 </button>
