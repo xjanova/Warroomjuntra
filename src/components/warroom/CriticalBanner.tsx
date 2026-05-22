@@ -19,30 +19,55 @@ export function CriticalBanner() {
   const sla = useSettings((s) => s.sla);
   const feed = useFortuneFeed();
 
+  // True when the alert we're rendering is from mock data, not live readings.
+  // We still show it (so the layout previews on a fresh install) but label it
+  // clearly as DEMO so nobody mistakes it for a real critical case.
+  const isDemo = feed.source !== 'live';
+
   const alert = useMemo<Alert>(() => {
-    const candidate: Alert =
-      feed.source === 'mock' || (feed.source === 'loading' && feed.data.length === 0)
-        ? CRITICAL_ALERT
-        : deriveCriticalAlert(
-            feed.data
-              .filter((r) => r.response_type === 'pending' || !r.responded_at)
-              .map((r) => readingToTriageCase(r, sla))
-          );
+    const candidate: Alert = isDemo
+      ? CRITICAL_ALERT
+      : deriveCriticalAlert(
+          feed.data
+            .filter((r) => r.response_type === 'pending' || !r.responded_at)
+            .map((r) => readingToTriageCase(r, sla))
+        );
     if (!candidate) return null;
     if (candidate.caseId === dismissedId) return null;
     return candidate;
-  }, [feed.data, feed.source, sla, dismissedId]);
+  }, [feed.data, isDemo, sla, dismissedId]);
 
   if (!alert) return null;
 
   return (
-    <div className="bg-crit/10 border-b border-crit/40 px-3 py-1.5 flex items-center gap-3 text-xs relative overflow-hidden shrink-0">
-      <span className="dot dot-crit" />
-      <span className="font-semibold text-crit tracking-wide">🚨 แจ้งเตือนวิกฤต</span>
-      <span className="text-fg">{alert.msg}</span>
+    <div
+      className={
+        isDemo
+          ? 'bg-mute/5 border-b border-line px-3 py-1.5 flex items-center gap-3 text-xs relative overflow-hidden shrink-0'
+          : 'bg-crit/10 border-b border-crit/40 px-3 py-1.5 flex items-center gap-3 text-xs relative overflow-hidden shrink-0'
+      }
+    >
+      <span className={isDemo ? 'dot dot-mute' : 'dot dot-crit'} />
+      {isDemo ? (
+        <span
+          title="ข้อมูลตัวอย่าง — เชื่อมต่อกับ thaiprompt.online ใน Settings เพื่อดูเคสจริง"
+          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-line bg-panel2 text-mute text-[9px] tracking-widest uppercase font-semibold mono"
+        >
+          <span className="w-1 h-1 rounded-full bg-mute" />
+          DEMO
+        </span>
+      ) : (
+        <span className="font-semibold text-crit tracking-wide">🚨 แจ้งเตือนวิกฤต</span>
+      )}
+      <span className={isDemo ? 'text-mute' : 'text-fg'}>{alert.msg}</span>
       <span className="mono text-2xs text-dim">เมื่อ {alert.ago}</span>
       <div className="flex-1" />
-      <button onClick={() => openCaseDrawer(alert.caseId)} className="btn btn-crit">
+      <button
+        onClick={() => openCaseDrawer(alert.caseId)}
+        className={isDemo ? 'btn btn-ghost' : 'btn btn-crit'}
+        disabled={isDemo}
+        title={isDemo ? 'ใช้ได้เมื่อเชื่อมต่อข้อมูลจริงแล้ว' : undefined}
+      >
         เปิดเคส →
       </button>
       <button onClick={() => setDismissedId(alert.caseId)} className="btn btn-ghost">
