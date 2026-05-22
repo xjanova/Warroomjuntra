@@ -67,6 +67,43 @@ export async function logout() {
   return apiRequest<{ ok: boolean }>({ method: 'POST', path: '/auth/logout' });
 }
 
+export async function logoutAll() {
+  return apiRequest<{ ok: boolean }>({ method: 'POST', path: '/auth/logout-all' });
+}
+
+// QR pair-code flow — admin web creates a pair_code, mobile/warroom claims it.
+export async function pairInit() {
+  return apiRequest<{ pair_code: string; expires_at: string }>({
+    method: 'POST',
+    path: '/auth/pair/init',
+  });
+}
+
+export async function pairCancel(code: string) {
+  return apiRequest<{ ok: boolean }>({
+    method: 'POST',
+    path: '/auth/pair/cancel',
+    body: { pair_code: code },
+  });
+}
+
+export async function pairClaim(code: string) {
+  return apiRequest<{ token: string; user: AdminMe }>({
+    method: 'POST',
+    path: '/auth/pair/claim',
+    body: { pair_code: code },
+    allowAnon: true,
+  });
+}
+
+export async function pairStatus(code: string) {
+  const qs = toQuery({ pair_code: code });
+  return apiRequest<{ status: 'pending' | 'claimed' | 'expired' | 'cancelled' }>({
+    path: `/auth/pair/status${qs}`,
+    allowAnon: true,
+  });
+}
+
 // ---- Dashboard (KPIs) ------------------------------------------------------
 
 export async function fetchDashboard() {
@@ -107,30 +144,66 @@ export async function fetchFortuneReading(id: string | number) {
   return apiRequest<FortuneReading>({ path: `/fortune/readings/${id}` });
 }
 
-// ---- Wallets / Withdrawals (Payment recon + Approvals) ---------------------
+// ---- Finance: Wallets / Withdrawals (Payment recon + Approvals) ------------
+// IMPORTANT: routes are mounted under /finance/* (not /wallets/* or /withdrawals/*)
+// despite the controller namespace being Finance\WalletController. Match the
+// actual route prefix in routes/admin_api.php, not the controller name.
 
 export async function fetchWallets(params?: { page?: number; per_page?: number; q?: string }) {
   const qs = toQuery(params);
-  return apiRequest<unknown>({ path: `/wallets${qs}` });
+  return apiRequest<unknown>({ path: `/finance/wallets${qs}` });
 }
 
 export async function fetchWalletsSystemStats() {
-  return apiRequest<unknown>({ path: '/wallets/system-stats' });
+  return apiRequest<unknown>({ path: '/finance/wallets/system-stats' });
 }
 
 export async function fetchWalletTransactions(params?: { wallet_id?: string | number; page?: number }) {
   const qs = toQuery(params);
-  return apiRequest<unknown>({ path: `/wallets/transactions${qs}` });
+  return apiRequest<unknown>({ path: `/finance/wallets/transactions${qs}` });
+}
+
+export async function fetchWallet(id: string | number) {
+  return apiRequest<unknown>({ path: `/finance/wallets/${id}` });
+}
+
+export async function adjustWalletBalance(id: string | number, payload: { amount: number; reason: string }) {
+  return apiRequest<unknown>({ method: 'POST', path: `/finance/wallets/${id}/adjust`, body: payload });
+}
+
+export async function lockWallet(id: string | number, reason?: string) {
+  return apiRequest<unknown>({ method: 'POST', path: `/finance/wallets/${id}/lock`, body: reason ? { reason } : {} });
+}
+
+export async function unlockWallet(id: string | number) {
+  return apiRequest<unknown>({ method: 'POST', path: `/finance/wallets/${id}/unlock` });
+}
+
+export async function suspendWallet(id: string | number, reason?: string) {
+  return apiRequest<unknown>({ method: 'POST', path: `/finance/wallets/${id}/suspend`, body: reason ? { reason } : {} });
+}
+
+export async function unsuspendWallet(id: string | number) {
+  return apiRequest<unknown>({ method: 'POST', path: `/finance/wallets/${id}/unsuspend` });
+}
+
+export async function fetchWithdrawals(params?: { page?: number; per_page?: number; status?: string }) {
+  const qs = toQuery(params);
+  return apiRequest<WithdrawalsListResponse>({ path: `/finance/withdrawals${qs}` });
 }
 
 export async function fetchPendingWithdrawals() {
-  return apiRequest<WithdrawalsListResponse>({ path: '/withdrawals/pending' });
+  return apiRequest<WithdrawalsListResponse>({ path: '/finance/withdrawals/pending' });
+}
+
+export async function fetchWithdrawal(id: string | number) {
+  return apiRequest<unknown>({ path: `/finance/withdrawals/${id}` });
 }
 
 export async function approveWithdrawal(id: string | number, note?: string) {
   return apiRequest<unknown>({
     method: 'POST',
-    path: `/withdrawals/${id}/approve`,
+    path: `/finance/withdrawals/${id}/approve`,
     body: note ? { note } : {},
   });
 }
@@ -138,8 +211,24 @@ export async function approveWithdrawal(id: string | number, note?: string) {
 export async function rejectWithdrawal(id: string | number, reason: string) {
   return apiRequest<unknown>({
     method: 'POST',
-    path: `/withdrawals/${id}/reject`,
+    path: `/finance/withdrawals/${id}/reject`,
     body: { reason },
+  });
+}
+
+export async function completeWithdrawal(id: string | number, note?: string) {
+  return apiRequest<unknown>({
+    method: 'POST',
+    path: `/finance/withdrawals/${id}/complete`,
+    body: note ? { note } : {},
+  });
+}
+
+export async function batchApproveWithdrawals(ids: Array<string | number>) {
+  return apiRequest<unknown>({
+    method: 'POST',
+    path: '/finance/withdrawals/batch-approve',
+    body: { ids },
   });
 }
 
@@ -150,16 +239,31 @@ export async function fetchAiDashboard(params?: { period?: 'today' | 'week' | 'm
   return apiRequest<AiDashboardResponse>({ path: `/ai/dashboard${qs}` });
 }
 
+export async function fetchAiTimeseries(params?: { hours?: number }) {
+  const qs = toQuery(params);
+  return apiRequest<{
+    hours: number;
+    series: Array<{ time: string; requests: number; avg_latency_ms: number }>;
+  }>({ path: `/ai/dashboard/timeseries${qs}` });
+}
+
 export async function fetchAiProviders() {
   return apiRequest<unknown>({ path: '/ai/providers' });
 }
 
-export async function toggleAiProvider(provider: string) {
-  return apiRequest<unknown>({ method: 'POST', path: `/ai/providers/${provider}/toggle` });
+export async function fetchAiProvider(id: string | number) {
+  return apiRequest<unknown>({ path: `/ai/providers/${id}` });
 }
 
-export async function testAiProvider(provider: string) {
-  return apiRequest<unknown>({ method: 'POST', path: `/ai/providers/${provider}/test-connection` });
+export async function toggleAiProvider(id: string | number) {
+  return apiRequest<unknown>({ method: 'POST', path: `/ai/providers/${id}/toggle` });
+}
+
+export async function testAiProvider(id: string | number) {
+  return apiRequest<{ ok: boolean; latency_ms?: number; message?: string }>({
+    method: 'POST',
+    path: `/ai/providers/${id}/test-connection`,
+  });
 }
 
 export async function fetchAiBots(params?: { search?: string; active?: boolean; per_page?: number; page?: number }) {
@@ -167,8 +271,20 @@ export async function fetchAiBots(params?: { search?: string; active?: boolean; 
   return apiRequest<AiBotsResponse>({ path: `/ai/bots${qs}` });
 }
 
+export async function fetchAiBot(id: string | number) {
+  return apiRequest<unknown>({ path: `/ai/bots/${id}` });
+}
+
 export async function toggleAiBot(botId: string | number) {
   return apiRequest<unknown>({ method: 'POST', path: `/ai/bots/${botId}/toggle` });
+}
+
+export async function testAiBot(botId: string | number, payload?: { prompt?: string }) {
+  return apiRequest<{ ok: boolean; output?: string; latency_ms?: number; error?: string }>({
+    method: 'POST',
+    path: `/ai/bots/${botId}/test`,
+    body: payload ?? {},
+  });
 }
 
 // ---- Users (Customer 360) --------------------------------------------------
@@ -197,6 +313,31 @@ export async function fetchUser(id: string | number) {
 
 export async function fetchAnalyticsOverview() {
   return apiRequest<AnalyticsOverview>({ path: '/analytics/overview' });
+}
+
+// ---- Ranks (leaderboard tiers) ---------------------------------------------
+
+export async function fetchRanks() {
+  return apiRequest<Array<{
+    id: number;
+    name: string;
+    name_th?: string;
+    level: number;
+    color?: string;
+    min_volume?: number;
+    [k: string]: unknown;
+  }>>({ path: '/ranks' });
+}
+
+// ---- Marketplace (read-only — out of warroom's primary scope) --------------
+
+export async function fetchMarketplaceDashboard() {
+  return apiRequest<unknown>({ path: '/marketplace/dashboard' });
+}
+
+export async function fetchMarketplaceOrders(params?: { page?: number; per_page?: number; status?: string }) {
+  const qs = toQuery(params);
+  return apiRequest<unknown>({ path: `/marketplace/orders${qs}` });
 }
 
 // ---- Helpers ---------------------------------------------------------------
