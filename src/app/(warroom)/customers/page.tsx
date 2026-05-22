@@ -6,6 +6,7 @@ import { ChannelChip, Pill } from '@/components/ui/Pill';
 import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { useAdminData, fetchUsers, fetchUserStats, type AdminUserStats } from '@/lib/api';
 import { userToCustomerCard } from '@/lib/adapters/customers';
+import { useWarroom } from '@/lib/stores/warroom';
 
 type SortKey = 'ltv' | 'recent' | 'readings';
 
@@ -18,6 +19,7 @@ const RARITY_BORDERS: Record<Rarity, string> = {
 };
 
 export default function CustomersPage() {
+  const openCustomerDrawer = useWarroom((s) => s.openCustomerDrawer);
   const [search, setSearch] = useState('');
   const [chan, setChan] = useState('');
   const [rarity, setRarity] = useState('');
@@ -122,7 +124,8 @@ export default function CustomersPage() {
         {filtered.map((c) => (
           <div
             key={c.id}
-            className={`relative overflow-hidden rounded-lg border ${RARITY_BORDERS[c.rarity]}`}
+            onClick={() => openCustomerDrawer(String(c.id))}
+            className={`relative overflow-hidden rounded-lg border ${RARITY_BORDERS[c.rarity]} cursor-pointer hover:border-info/60 transition-colors`}
             style={{
               background:
                 'radial-gradient(circle at top right, rgba(139,92,246,.18), transparent 50%), linear-gradient(135deg, #1a1330, #0d1320)',

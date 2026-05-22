@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useSettings, isPaired } from '@/lib/stores/settings';
 import { useWarroom } from '@/lib/stores/warroom';
-import { describeError } from './errors';
+import { ApiError, describeError } from './errors';
 
 export type DataSource = 'live' | 'mock' | 'loading' | 'error';
 
@@ -41,6 +41,7 @@ type CacheEntry<T> = {
   lastFetchedAt: number | null;
   inflight: Promise<void> | null;
   subscribers: Set<() => void>;
+  fetcher: (() => Promise<unknown>) | null;
 };
 
 const cache = new Map<string, CacheEntry<unknown>>();
@@ -56,6 +57,7 @@ function getEntry<T>(key: string): CacheEntry<T> {
       lastFetchedAt: null,
       inflight: null,
       subscribers: new Set(),
+      fetcher: null,
     };
     cache.set(key, e as unknown as CacheEntry<unknown>);
   }
@@ -70,6 +72,8 @@ function notify(key: string) {
 
 async function fetchInto<T>(key: string, fetcher: () => Promise<T>): Promise<void> {
   const e = getEntry<T>(key);
+  // Remember the fetcher so refreshAll() can re-invoke it later.
+  e.fetcher = fetcher as () => Promise<unknown>;
   // Dedupe: if a request is already in flight, await it instead of starting a new one.
   if (e.inflight) return e.inflight;
 
@@ -87,6 +91,22 @@ async function fetchInto<T>(key: string, fetcher: () => Promise<T>): Promise<voi
       e.error = describeError(err);
       e.source = 'error';
       // keep last data — better than blanking the UI on a transient blip
+
+      // If our token went bad mid-session (401/403), flip the connection to
+      // 'error' so polling stops everywhere instead of spamming retries.
+      if (err instanceof ApiError && (err.kind === 'unauthorized' || err.kind === 'forbidden')) {
+        try {
+          // dynamic import to avoid a circular dep at module init
+          const { useSettings } = await import('@/lib/stores/settings');
+          const s = useSettings.getState();
+          if (s.connection.status === 'paired') {
+            s.setConnectionStatus('error', e.error);
+            s.markChecked();
+          }
+        } catch {
+          /* ignore */
+        }
+      }
     } finally {
       e.isLoading = false;
       e.inflight = null;
@@ -109,6 +129,23 @@ export function invalidate(key: string) {
 /** Manually evict a key entirely. */
 export function evict(key: string) {
   cache.delete(key);
+}
+
+/**
+ * Refresh every cache entry that has a stored fetcher. Used by the TopBar
+ * "refresh now" button when the operator wants fresh data without waiting
+ * for the next poll tick.
+ */
+export function refreshAll() {
+  for (const [key, e] of cache.entries()) {
+    if (e.subscribers.size === 0) continue; // nothing mounted; skip
+    if (!e.fetcher) continue;
+    void fetchInto(key, e.fetcher);
+  }
+}
+
+export function getCacheKeys(): string[] {
+  return Array.from(cache.keys());
 }
 
 // ── Hook ────────────────────────────────────────────────────────────────────

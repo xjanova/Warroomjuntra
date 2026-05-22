@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect } from 'react';
-import { Search, Pause, Play, VolumeX, Volume2, Focus, Maximize2 } from 'lucide-react';
+import { Search, Pause, Play, VolumeX, Volume2, Focus, Maximize2, RefreshCw } from 'lucide-react';
 import { useWarroom } from '@/lib/stores/warroom';
-import { useSettings } from '@/lib/stores/settings';
+import { useSettings, isPaired } from '@/lib/stores/settings';
+import { verifyConnection, refreshAll } from '@/lib/api';
 import { Kbd } from '@/components/ui/Kbd';
 import { formatClock, formatThaiDate, cn } from '@/lib/utils';
 
@@ -24,6 +25,7 @@ export function TopBar() {
     setCmdkOpen,
   } = useWarroom();
   const setPersistedRefresh = useSettings((s) => s.setRefreshInterval);
+  const paired = useSettings((s) => isPaired(s));
 
   // tick every second
   useEffect(() => {
@@ -98,6 +100,22 @@ export function TopBar() {
           <option value={30}>30 วิ</option>
         </select>
       </div>
+
+      {paired && (
+        <button
+          type="button"
+          onClick={() => {
+            // Re-verify the connection (in case token expired silently) and
+            // force every mounted hook to refetch immediately.
+            void verifyConnection();
+            refreshAll();
+          }}
+          title="รีเฟรชข้อมูลทันที"
+          className="btn btn-ghost"
+        >
+          <RefreshCw size={12} />
+        </button>
+      )}
 
       <button
         type="button"

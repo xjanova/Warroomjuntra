@@ -1,27 +1,57 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useWarroom } from '@/lib/stores/warroom';
+import { useSettings } from '@/lib/stores/settings';
+import { useReadingDetail } from '@/lib/api';
 import { DrawerShell } from './DrawerShell';
 import { Pill } from '@/components/ui/Pill';
+import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { ALL_CASES, CASE_TIMELINE } from '@/lib/mock/warroom';
+import { readingToTriageCase } from '@/lib/adapters/triage';
 import { severityColor, typeMeta } from '@/lib/helpers';
+import type { TriageCase } from '@/lib/mock/types';
 
 const TABS = ['ไทม์ไลน์', 'ข้อมูลที่เกี่ยว', 'ประวัติแอคชัน', 'โน้ต'] as const;
 type Tab = (typeof TABS)[number];
 
 export function CaseDetailDrawer() {
   const { caseDrawerId, closeCaseDrawer } = useWarroom();
+  const sla = useSettings((s) => s.sla);
   const [tab, setTab] = useState<Tab>('ไทม์ไลน์');
-  const activeCase = ALL_CASES.find((c) => c.id === caseDrawerId);
+
+  // Live readings have ids like "r-{numeric}" — extract and fetch.
+  // Mock cases have ids like "c-pay-001" — look up locally.
+  const readingId = caseDrawerId?.startsWith('r-') ? caseDrawerId.slice(2) : null;
+  const detail = useReadingDetail(readingId);
+
   const open = !!caseDrawerId;
 
+  const activeCase: TriageCase | null = useMemo(() => {
+    if (!caseDrawerId) return null;
+    if (readingId && detail.data) {
+      return readingToTriageCase(detail.data, sla);
+    }
+    return ALL_CASES.find((c) => c.id === caseDrawerId) ?? null;
+  }, [caseDrawerId, readingId, detail.data, sla]);
+
   if (!activeCase) {
-    return <DrawerShell open={open} onClose={closeCaseDrawer}>{null}</DrawerShell>;
+    return (
+      <DrawerShell open={open} onClose={closeCaseDrawer}>
+        <div className="p-6 text-center text-mute text-sm">
+          {detail.isLoading && readingId
+            ? 'กำลังโหลดข้อมูลเคส…'
+            : detail.error
+            ? `โหลดเคสไม่สำเร็จ — ${detail.error}`
+            : 'ไม่พบเคสนี้'}
+        </div>
+      </DrawerShell>
+    );
   }
 
   const meta = typeMeta(activeCase.type);
   const sev = severityColor(activeCase.severity);
+  const reading = detail.data;
 
   return (
     <DrawerShell open={open} onClose={closeCaseDrawer}>
@@ -32,6 +62,9 @@ export function CaseDetailDrawer() {
           </button>
           <span className="t-h">เคส</span>
           <span className="mono text-2xs text-mute">{activeCase.id.toUpperCase()}</span>
+          {readingId && (
+            <DataSourceBadge source={detail.source} isLoading={detail.isLoading} error={detail.error} />
+          )}
           <div className="flex-1" />
           <button className="btn btn-ghost h-7 px-2">ESCALATE ↑</button>
           <button className="btn btn-ok h-7 px-2">ปิดเคส</button>
@@ -87,73 +120,56 @@ export function CaseDetailDrawer() {
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {tab === 'ไทม์ไลน์' && (
-          <div className="space-y-3">
-            {CASE_TIMELINE.map((ev, i) => (
-              <div key={i} className="flex gap-3">
-                <div className="relative shrink-0">
-                  <div
-                    className="w-7 h-7 rounded-full grid place-items-center"
-                    style={{
-                      background: `${severityColor(ev.tone)}22`,
-                      border: `1px solid ${severityColor(ev.tone)}66`,
-                    }}
-                  >
-                    <span className="text-xs">{ev.icon}</span>
-                  </div>
-                  {i < CASE_TIMELINE.length - 1 && (
-                    <div className="absolute left-1/2 top-7 bottom-[-12px] w-px bg-line -translate-x-1/2" />
-                  )}
-                </div>
-                <div className="flex-1 pb-3">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm text-fg">{ev.title}</span>
-                    <span className="text-2xs text-mute mono">{ev.ts}</span>
-                  </div>
-                  <div className="text-2xs text-dim mt-0.5">{ev.desc}</div>
-                </div>
-              </div>
-            ))}
-          </div>
+          <LiveOrMockTimeline reading={reading} />
         )}
 
         {tab === 'ข้อมูลที่เกี่ยว' && (
-          <div className="space-y-3 text-xs">
-            <div className="bg-panel2 border border-line rounded p-3">
-              <div className="t-h mb-2">บิลที่เกี่ยวข้อง</div>
-              <dl className="space-y-1.5 mono">
-                <div className="flex justify-between"><dt className="text-dim">เลขบิล</dt><dd className="text-fg">FB-2026-05-21-0142</dd></div>
-                <div className="flex justify-between"><dt className="text-dim">ยอดบิล</dt><dd className="text-fg">฿2,499.00</dd></div>
-                <div className="flex justify-between"><dt className="text-dim">ยอดโอน SMS</dt><dd className="text-crit">฿2,500.00</dd></div>
-                <div className="flex justify-between"><dt className="text-dim">ส่วนต่าง</dt><dd className="text-warn">+฿1.00</dd></div>
-                <div className="flex justify-between"><dt className="text-dim">ธนาคาร</dt><dd className="text-fg">KBANK xxx-2841</dd></div>
-                <div className="flex justify-between"><dt className="text-dim">เวลาโอน</dt><dd className="text-fg">14:23:08</dd></div>
-              </dl>
-            </div>
-            <div className="bg-panel2 border border-line rounded p-3">
-              <div className="t-h mb-2">คำทำนายที่เกี่ยวข้อง</div>
-              <div className="text-fg text-sm">Celtic Cross — คำถาม &quot;ความรักหลังเลิกแฟน&quot;</div>
-              <div className="text-2xs text-dim mt-1">AI: qwen-72b · เวลาตอบ pending · เครดิตหัก 5</div>
-            </div>
-          </div>
+          <RelatedInfo reading={reading} activeCase={activeCase} />
         )}
 
         {tab === 'ประวัติแอคชัน' && (
           <div className="space-y-2 text-xs">
-            <div className="flex items-center gap-2">
-              <span className="dot dot-info" />
-              <span className="text-mute mono">14:18</span>
-              <span className="text-fg">แอน — รับเคส</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="dot dot-ok" />
-              <span className="text-mute mono">14:21</span>
-              <span className="text-fg">แอน — ปิดปากบอท</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="dot dot-warn" />
-              <span className="text-mute mono">14:25</span>
-              <span className="text-fg">ระบบ — escalate ถึงนัท</span>
-            </div>
+            {reading?.responded_at ? (
+              <>
+                <div className="flex items-center gap-2">
+                  <span className="dot dot-info" />
+                  <span className="text-mute mono">{formatTime(reading.created_at)}</span>
+                  <span className="text-fg">สร้างคำถาม</span>
+                </div>
+                {reading.paid_at && (
+                  <div className="flex items-center gap-2">
+                    <span className="dot dot-ok" />
+                    <span className="text-mute mono">{formatTime(reading.paid_at)}</span>
+                    <span className="text-fg">ชำระเงิน · ฿{reading.amount_paid.toLocaleString()}</span>
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  <span className="dot dot-mystic" />
+                  <span className="text-mute mono">{formatTime(reading.responded_at)}</span>
+                  <span className="text-fg">
+                    {reading.response_type === 'admin' ? 'Admin ตอบ' : `AI ตอบ · ${reading.ai?.provider ?? 'unknown'}`}
+                  </span>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center gap-2">
+                  <span className="dot dot-info" />
+                  <span className="text-mute mono">14:18</span>
+                  <span className="text-fg">แอน — รับเคส</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="dot dot-ok" />
+                  <span className="text-mute mono">14:21</span>
+                  <span className="text-fg">แอน — ปิดปากบอท</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="dot dot-warn" />
+                  <span className="text-mute mono">14:25</span>
+                  <span className="text-fg">ระบบ — escalate ถึงนัท</span>
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -176,4 +192,200 @@ export function CaseDetailDrawer() {
       </div>
     </DrawerShell>
   );
+}
+
+function LiveOrMockTimeline({ reading }: { reading: import('@/lib/api').FortuneReading | null | undefined }) {
+  if (!reading) {
+    // Mock case fallback
+    return (
+      <div className="space-y-3">
+        {CASE_TIMELINE.map((ev, i) => (
+          <div key={i} className="flex gap-3">
+            <div className="relative shrink-0">
+              <div
+                className="w-7 h-7 rounded-full grid place-items-center"
+                style={{
+                  background: `${severityColor(ev.tone)}22`,
+                  border: `1px solid ${severityColor(ev.tone)}66`,
+                }}
+              >
+                <span className="text-xs">{ev.icon}</span>
+              </div>
+              {i < CASE_TIMELINE.length - 1 && (
+                <div className="absolute left-1/2 top-7 bottom-[-12px] w-px bg-line -translate-x-1/2" />
+              )}
+            </div>
+            <div className="flex-1 pb-3">
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-fg">{ev.title}</span>
+                <span className="text-2xs text-mute mono">{ev.ts}</span>
+              </div>
+              <div className="text-2xs text-dim mt-0.5">{ev.desc}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  // Live timeline built from FortuneReading fields
+  type TimelineEvent = { ts: string; icon: string; tone: string; title: string; desc: string };
+  const events: TimelineEvent[] = [];
+  if (reading.created_at)
+    events.push({
+      ts: formatFull(reading.created_at),
+      icon: '✉',
+      tone: 'info',
+      title: 'สร้างคำถาม',
+      desc: previewQuestions(reading.questions),
+    });
+  if (reading.paid_at)
+    events.push({
+      ts: formatFull(reading.paid_at),
+      icon: '💰',
+      tone: 'ok',
+      title: 'ชำระเงิน',
+      desc: `฿${reading.amount_paid.toLocaleString()}`,
+    });
+  if (reading.responded_at) {
+    const isAdmin = reading.response_type === 'admin';
+    events.push({
+      ts: formatFull(reading.responded_at),
+      icon: isAdmin ? '👤' : '🤖',
+      tone: 'mystic',
+      title: isAdmin ? 'Admin ตอบ' : `AI ตอบ · ${reading.ai?.provider ?? 'unknown'}`,
+      desc: reading.ai_response ? truncate(reading.ai_response, 200) : '(ไม่มี response text)',
+    });
+  } else {
+    events.push({
+      ts: '—',
+      icon: '⌛',
+      tone: 'warn',
+      title: 'รอคำทำนาย',
+      desc: 'ยังไม่มี response',
+    });
+  }
+
+  return (
+    <div className="space-y-3">
+      {events.map((ev, i) => (
+        <div key={i} className="flex gap-3">
+          <div className="relative shrink-0">
+            <div
+              className="w-7 h-7 rounded-full grid place-items-center"
+              style={{
+                background: `${severityColor(ev.tone)}22`,
+                border: `1px solid ${severityColor(ev.tone)}66`,
+              }}
+            >
+              <span className="text-xs">{ev.icon}</span>
+            </div>
+            {i < events.length - 1 && (
+              <div className="absolute left-1/2 top-7 bottom-[-12px] w-px bg-line -translate-x-1/2" />
+            )}
+          </div>
+          <div className="flex-1 pb-3">
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-fg">{ev.title}</span>
+              <span className="text-2xs text-mute mono">{ev.ts}</span>
+            </div>
+            <div className="text-2xs text-dim mt-0.5">{ev.desc}</div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function RelatedInfo({
+  reading,
+  activeCase,
+}: {
+  reading: import('@/lib/api').FortuneReading | null | undefined;
+  activeCase: TriageCase;
+}) {
+  if (!reading) {
+    return (
+      <div className="space-y-3 text-xs">
+        <div className="bg-panel2 border border-line rounded p-3">
+          <div className="t-h mb-2">บิลที่เกี่ยวข้อง</div>
+          <dl className="space-y-1.5 mono">
+            <div className="flex justify-between"><dt className="text-dim">เลขบิล</dt><dd className="text-fg">{activeCase.id.toUpperCase()}</dd></div>
+            <div className="flex justify-between"><dt className="text-dim">ยอด</dt><dd className="text-fg">฿{(activeCase.amount ?? 0).toLocaleString()}</dd></div>
+            <div className="flex justify-between"><dt className="text-dim">ช่องทาง</dt><dd className="text-fg">{activeCase.channel}</dd></div>
+          </dl>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3 text-xs">
+      <div className="bg-panel2 border border-line rounded p-3">
+        <div className="t-h mb-2">บิล/การชำระเงิน</div>
+        <dl className="space-y-1.5 mono">
+          <div className="flex justify-between"><dt className="text-dim">Reading ID</dt><dd className="text-fg">{reading.id}</dd></div>
+          <div className="flex justify-between"><dt className="text-dim">ประเภท</dt><dd className="text-fg">{reading.reading_type === 'deep' ? 'Celtic Cross' : reading.reading_type}</dd></div>
+          <div className="flex justify-between"><dt className="text-dim">ยอด</dt><dd className="text-fg">฿{reading.amount_paid.toLocaleString()}</dd></div>
+          <div className="flex justify-between"><dt className="text-dim">สถานะ</dt><dd className={reading.is_paid ? 'text-ok' : 'text-warn'}>{reading.is_paid ? 'จ่ายแล้ว' : 'ยังไม่จ่าย'}</dd></div>
+          {reading.paid_at && (
+            <div className="flex justify-between"><dt className="text-dim">จ่ายเมื่อ</dt><dd className="text-fg">{formatFull(reading.paid_at)}</dd></div>
+          )}
+        </dl>
+      </div>
+      <div className="bg-panel2 border border-line rounded p-3">
+        <div className="t-h mb-2">คำถาม</div>
+        <div className="text-fg text-sm leading-relaxed whitespace-pre-wrap">
+          {previewQuestions(reading.questions, 500)}
+        </div>
+      </div>
+      {reading.ai_response && (
+        <div className="bg-panel2 border border-line rounded p-3">
+          <div className="t-h mb-2">คำตอบ {reading.response_type === 'admin' ? '(จาก Admin)' : `(จาก ${reading.ai?.provider ?? 'AI'})`}</div>
+          <div className="text-fg text-sm leading-relaxed whitespace-pre-wrap">
+            {reading.ai_response}
+          </div>
+          {reading.ai?.tokens_used != null && (
+            <div className="text-2xs text-mute mono mt-2">
+              tokens: {reading.ai.tokens_used.toLocaleString()}
+              {reading.ai.model ? ` · model: ${reading.ai.model}` : ''}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function formatTime(iso?: string | null): string {
+  if (!iso) return '--:--';
+  try {
+    return new Date(iso).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return iso;
+  }
+}
+
+function formatFull(iso?: string | null): string {
+  if (!iso) return '—';
+  try {
+    return new Date(iso).toLocaleString('th-TH', {
+      day: '2-digit',
+      month: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return iso;
+  }
+}
+
+function previewQuestions(q: import('@/lib/api').FortuneReading['questions'], max = 200): string {
+  if (!q) return '(ไม่มีคำถาม)';
+  const text = Array.isArray(q) ? q.join('\n') : String(q);
+  return truncate(text, max);
+}
+
+function truncate(s: string, n: number): string {
+  return s.length <= n ? s : s.slice(0, n - 1) + '…';
 }
