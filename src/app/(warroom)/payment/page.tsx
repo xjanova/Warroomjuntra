@@ -12,6 +12,7 @@ import {
   type SmsRecord,
 } from '@/lib/mock/payment';
 import { ChannelChip, Pill } from '@/components/ui/Pill';
+import { PendingApiBanner } from '@/components/ui/PendingApiBanner';
 import { useWarroom } from '@/lib/stores/warroom';
 
 export default function PaymentPage() {
@@ -51,6 +52,10 @@ export default function PaymentPage() {
 
   return (
     <div className="flex flex-col h-full min-h-0">
+      <PendingApiBanner
+        endpoint="/sms/inbox + /reconcile/match"
+        rationale="ต้อง parser SMS ธนาคารฝั่ง server + endpoint จับคู่บิล ↔ ยอดโอน"
+      />
       <header className="h-12 flex items-center border-b border-line bg-panel2/40 px-3 gap-3 shrink-0">
         <span className="dot dot-ok" />
         <span className="t-h">กระทบยอดการเงิน · RECONCILIATION</span>

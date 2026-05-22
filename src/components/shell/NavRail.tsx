@@ -5,6 +5,8 @@ import { usePathname } from 'next/navigation';
 import { Settings as SettingsIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useWarroom } from '@/lib/stores/warroom';
+import { useFortuneFeed, useAdminData, fetchPendingWithdrawals } from '@/lib/api';
+import { useMemo } from 'react';
 
 type NavItem = {
   key: string;
@@ -14,7 +16,7 @@ type NavItem = {
   icon: React.ReactNode;
 };
 
-const ITEMS: NavItem[] = [
+const STATIC_ITEMS: NavItem[] = [
   {
     key: 'warroom',
     href: '/',
@@ -27,7 +29,6 @@ const ITEMS: NavItem[] = [
     key: 'chat',
     href: '/chat',
     label: 'แชต',
-    badge: '12',
     icon: <path d="M21 11.5a8.38 8.38 0 0 1-9 8.38 8.5 8.5 0 0 1-3.8-.9L3 21l1.9-5.2A8.38 8.38 0 0 1 21 11.5z" />,
   },
   {
@@ -75,14 +76,12 @@ const ITEMS: NavItem[] = [
     key: 'approvals',
     href: '/approvals',
     label: 'อนุมัติ',
-    badge: '5',
     icon: <polyline points="20 6 9 17 4 12" />,
   },
   {
     key: 'moderation',
     href: '/moderation',
     label: 'เฝ้าระวัง',
-    badge: '9',
     icon: (
       <>
         <path d="M12 2L4 7v6c0 5 3.5 9 8 10 4.5-1 8-5 8-10V7l-8-5z" />
@@ -128,6 +127,36 @@ const ITEMS: NavItem[] = [
 export function NavRail() {
   const pathname = usePathname();
   const setSettingsOpen = useWarroom((s) => s.setSettingsOpen);
+
+  // Live badge counts. Falls back to undefined when not paired — keeps the rail
+  // honest rather than displaying frozen mock numbers like "12 chat / 5 approvals".
+  const feed = useFortuneFeed();
+  const withdrawals = useAdminData<number | null>({
+    key: 'navrail-withdrawals',
+    fetcher: async () => {
+      const res = await fetchPendingWithdrawals();
+      const arr = Array.isArray(res) ? res : res.data;
+      return arr.length;
+    },
+    mock: null,
+    intervalOverride: 30, // refresh slower than the home page
+  });
+
+  const badges = useMemo<Record<string, string | undefined>>(() => {
+    if (feed.source !== 'live') return {};
+    const pending = feed.data.filter((r) => !r.responded_at || r.response_type === 'pending').length;
+    const admin = feed.data.filter((r) => r.response_type === 'admin').length;
+    return {
+      chat: pending > 0 ? String(pending) : undefined,
+      approvals: withdrawals.data && withdrawals.data > 0 ? String(withdrawals.data) : undefined,
+      moderation: admin > 0 ? String(admin) : undefined,
+    };
+  }, [feed.data, feed.source, withdrawals.data]);
+
+  const ITEMS = useMemo(
+    () => STATIC_ITEMS.map((it) => ({ ...it, badge: badges[it.key] ?? it.badge })),
+    [badges],
+  );
 
   const isActive = (href: string) => {
     if (href === '/') return pathname === '/';

@@ -1,39 +1,58 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { CHAT_TEMPLATES, CHAT_THREADS, type ChatThread } from '@/lib/mock/chat-page';
 import { ChannelChip, Pill } from '@/components/ui/Pill';
+import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { Switch } from '@/components/ui/Switch';
 import { Kbd } from '@/components/ui/Kbd';
 import { useWarroom } from '@/lib/stores/warroom';
+import { useFortuneFeed } from '@/lib/api';
+import { readingToChatThread } from '@/lib/adapters/chat';
 import { cn } from '@/lib/utils';
 
 const SENTIMENT_30D = 'oo+oo-oo+o-oo+';
 
 export default function ChatPage() {
+  const feed = useFortuneFeed();
+  const threads = useMemo<ChatThread[]>(() => {
+    if (feed.source === 'live' && feed.data.length > 0) {
+      return feed.data.map(readingToChatThread);
+    }
+    return CHAT_THREADS;
+  }, [feed.data, feed.source]);
+
   const [filter, setFilter] = useState('');
   const [channelFilter, setChannelFilter] = useState('');
   const [onlyAdmin, setOnlyAdmin] = useState(false);
-  const [activeId, setActiveId] = useState<string>(CHAT_THREADS[0].id);
+  const [activeId, setActiveId] = useState<string>(threads[0]?.id ?? '');
   const [bot, setBot] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(CHAT_THREADS.map((c) => [c.id, c.bot])),
+    Object.fromEntries(threads.map((c) => [c.id, c.bot])),
   );
+  // Reset active + bot map when the thread list changes (mock → live, or refetch).
+  useEffect(() => {
+    setBot(Object.fromEntries(threads.map((c) => [c.id, c.bot])));
+    if (!threads.find((c) => c.id === activeId)) {
+      setActiveId(threads[0]?.id ?? '');
+    }
+  }, [threads, activeId]);
+
   const [draft, setDraft] = useState('');
   const [aiSuggest, setAiSuggest] = useState('');
   const pushToast = useWarroom((s) => s.pushToast);
 
   const filtered = useMemo(
     () =>
-      CHAT_THREADS.filter((c) => {
+      threads.filter((c) => {
         if (channelFilter && c.channel !== channelFilter) return false;
         if (onlyAdmin && bot[c.id]) return false;
         if (filter && !c.name.toLowerCase().includes(filter.toLowerCase())) return false;
         return true;
       }),
-    [filter, channelFilter, onlyAdmin, bot],
+    [threads, filter, channelFilter, onlyAdmin, bot],
   );
 
-  const active = CHAT_THREADS.find((c) => c.id === activeId);
+  const active = threads.find((c) => c.id === activeId);
 
   const sendDraft = () => {
     const v = draft.trim();
@@ -46,6 +65,10 @@ export default function ChatPage() {
     <div className="grid h-full min-h-0" style={{ gridTemplateColumns: '280px 1fr 320px' }}>
       <aside className="border-r border-line flex flex-col bg-panel2/30 min-h-0">
         <div className="p-2 border-b border-line space-y-1.5">
+          <div className="flex items-center gap-2 px-1 mb-1">
+            <span className="t-h">แชต · LIVE</span>
+            <DataSourceBadge source={feed.source} isLoading={feed.isLoading} error={feed.error} />
+          </div>
           <input
             type="text"
             placeholder="ค้นหาแชต..."

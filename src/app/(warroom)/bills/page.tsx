@@ -1,18 +1,12 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { BILLS, billStatusLabel, billStatusTone, type Bill } from '@/lib/mock/bills';
 import { ChannelChip, Pill } from '@/components/ui/Pill';
+import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { useWarroom } from '@/lib/stores/warroom';
-
-const STATS = [
-  { label: 'บิลทั้งหมด (24ชม.)', value: '128', tone: 'fg' as const },
-  { label: 'จ่ายแล้ว', value: '98', tone: 'ok', sub: '฿48,290' },
-  { label: 'รอจ่าย', value: '22', tone: 'warn', sub: '฿14,890' },
-  { label: 'บิลลอย', value: '6', tone: 'crit', sub: '฿4,486' },
-  { label: 'ยกเลิก', value: '2', tone: 'mute' },
-  { label: 'คืนเงิน', value: '1', tone: 'rose', sub: '฿599' },
-];
+import { useFortuneFeed } from '@/lib/api';
+import { readingToBill } from '@/lib/adapters/bills';
 
 const TONE_COLOR: Record<string, string> = {
   fg: '#e5e7eb',
@@ -24,23 +18,54 @@ const TONE_COLOR: Record<string, string> = {
 };
 
 export default function BillsPage() {
+  const feed = useFortuneFeed();
+  const bills = useMemo<Bill[]>(() => {
+    if (feed.source === 'live' && feed.data.length > 0) {
+      return feed.data.map(readingToBill);
+    }
+    return BILLS;
+  }, [feed.data, feed.source]);
+
+  // Stats derived from current bill list so the tile numbers always match the table.
+  const stats = useMemo(() => {
+    const by = (s: Bill['status']) => bills.filter((b) => b.status === s);
+    const sum = (rows: Bill[]) => rows.reduce((acc, b) => acc + b.amount, 0);
+    const paid = by('paid');
+    const open = by('open');
+    const floating = by('floating');
+    const cancelled = by('cancelled');
+    const refunded = by('refunded');
+    return [
+      { label: 'บิลทั้งหมด', value: bills.length.toString(), tone: 'fg' as const },
+      { label: 'จ่ายแล้ว', value: paid.length.toString(), tone: 'ok', sub: `฿${sum(paid).toLocaleString()}` },
+      { label: 'รอจ่าย', value: open.length.toString(), tone: 'warn', sub: `฿${sum(open).toLocaleString()}` },
+      { label: 'บิลลอย', value: floating.length.toString(), tone: 'crit', sub: `฿${sum(floating).toLocaleString()}` },
+      { label: 'ยกเลิก', value: cancelled.length.toString(), tone: 'mute' },
+      { label: 'คืนเงิน', value: refunded.length.toString(), tone: 'rose', sub: refunded.length ? `฿${sum(refunded).toLocaleString()}` : undefined },
+    ];
+  }, [bills]);
+
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [chanFilter, setChanFilter] = useState('');
   const [svcFilter, setSvcFilter] = useState('');
-  const [active, setActive] = useState<Bill | null>(BILLS[0]);
+  const [active, setActive] = useState<Bill | null>(bills[0] ?? null);
+  useEffect(() => {
+    if (active && !bills.find((b) => b.id === active.id)) setActive(bills[0] ?? null);
+    if (!active && bills.length) setActive(bills[0]);
+  }, [bills, active]);
   const pushToast = useWarroom((s) => s.pushToast);
 
   const filtered = useMemo(
     () =>
-      BILLS.filter((b) => {
+      bills.filter((b) => {
         if (statusFilter && b.status !== statusFilter) return false;
         if (chanFilter && b.channel !== chanFilter) return false;
         if (svcFilter && b.service !== svcFilter) return false;
         if (search && !(b.id + b.customer).toLowerCase().includes(search.toLowerCase())) return false;
         return true;
       }),
-    [search, statusFilter, chanFilter, svcFilter],
+    [bills, search, statusFilter, chanFilter, svcFilter],
   );
 
   return (
@@ -48,13 +73,14 @@ export default function BillsPage() {
       <header className="h-12 flex items-center border-b border-line bg-panel2/40 px-3 gap-3 shrink-0">
         <span className="dot dot-info" />
         <span className="t-h">จัดการบิล / ใบเสร็จ · BILLS</span>
+        <DataSourceBadge source={feed.source} isLoading={feed.isLoading} error={feed.error} />
         <div className="flex-1" />
         <a href="/payment" className="btn">→ กระทบยอด</a>
       </header>
 
       <section className="px-3 py-2 border-b border-line shrink-0">
         <div className="grid grid-cols-6 gap-2">
-          {STATS.map((s) => (
+          {stats.map((s) => (
             <div key={s.label} className="panel px-3 py-2">
               <div className="t-h">{s.label}</div>
               <div className="mono text-2xl font-semibold mt-1" style={{ color: TONE_COLOR[s.tone] }}>{s.value}</div>

@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { Pill } from '@/components/ui/Pill';
 import { Kbd } from '@/components/ui/Kbd';
+import { PendingApiBanner } from '@/components/ui/PendingApiBanner';
 import { useWarroom } from '@/lib/stores/warroom';
 import { cn } from '@/lib/utils';
 
@@ -59,6 +60,10 @@ export default function PredictPage() {
 
   return (
     <div className="flex flex-col h-full min-h-0">
+      <PendingApiBanner
+        endpoint="/ai/playground/run (3 providers parallel)"
+        rationale="ต้อง endpoint run prompt → providers ทั้ง 3 ตัวพร้อมกัน ฝั่งนี้เป็น UI shell อย่างเดียว"
+      />
       <header className="h-12 flex items-center border-b border-line bg-panel2/40 px-3 gap-3 shrink-0">
         <span className="dot dot-mystic" />
         <span className="t-h">Workbench · ทดสอบทำนาย</span>

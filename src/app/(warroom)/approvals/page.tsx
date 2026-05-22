@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { APPROVAL_ITEMS, APPROVAL_STATS, APPROVAL_TABS, type ApprovalItem } from '@/lib/mock/approvals-page';
+import { APPROVAL_ITEMS, APPROVAL_TABS, type ApprovalItem } from '@/lib/mock/approvals-page';
 import { ChannelChip, Pill } from '@/components/ui/Pill';
 import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { useWarroom } from '@/lib/stores/warroom';
@@ -46,6 +46,49 @@ export default function ApprovalsPage() {
       ...t,
       count: t.k === 'all' ? items.length : count(t.k.toUpperCase()),
     }));
+  }, [items]);
+
+  // Stats derived from current items so the tile numbers match the table.
+  // Mock APPROVAL_STATS hard-coded "23 รออนุมัติ" but items.length might be 10 —
+  // that mismatch confused users on first load.
+  const stats = useMemo(() => {
+    const sum = (kind?: string) =>
+      items
+        .filter((i) => (kind ? i.kind === kind : true))
+        .reduce((acc, i) => acc + Math.abs(i.amount), 0);
+    const todayApproved: number = 0; // we don't track approved items locally yet
+    return [
+      {
+        label: 'รออนุมัติ',
+        value: items.length.toLocaleString(),
+        sub: `฿${sum().toLocaleString()} รวม`,
+        color: '#f59e0b',
+      },
+      {
+        label: 'คอมมิชชั่น',
+        value: `฿${sum('COMM').toLocaleString()}`,
+        sub: `${items.filter((i) => i.kind === 'COMM').length} รายการ`,
+        color: '#8b5cf6',
+      },
+      {
+        label: 'คืนเงิน',
+        value: `฿${sum('REFUND').toLocaleString()}`,
+        sub: `${items.filter((i) => i.kind === 'REFUND').length} ราย`,
+        color: '#ef4444',
+      },
+      {
+        label: 'เครดิตพิเศษ',
+        value: `฿${sum('CREDIT').toLocaleString()}`,
+        sub: `${items.filter((i) => i.kind === 'CREDIT').length} ราย`,
+        color: '#22d3ee',
+      },
+      {
+        label: 'วันนี้อนุมัติแล้ว',
+        value: todayApproved ? `฿${todayApproved.toLocaleString()}` : '—',
+        sub: 'ยังไม่ track',
+        color: '#10b981',
+      },
+    ];
   }, [items]);
 
   async function performAction(it: ApprovalItem, action: 'approve' | 'reject') {
@@ -115,7 +158,7 @@ export default function ApprovalsPage() {
 
       <section className="px-3 py-2 border-b border-line shrink-0">
         <div className="grid grid-cols-5 gap-2">
-          {APPROVAL_STATS.map((s) => (
+          {stats.map((s) => (
             <div key={s.label} className="panel px-3 py-2">
               <div className="t-h">{s.label}</div>
               <div className="mono text-2xl font-semibold mt-1" style={{ color: s.color }}>

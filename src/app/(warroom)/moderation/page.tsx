@@ -14,6 +14,7 @@ import {
 } from '@/lib/mock/moderation';
 import { ChannelChip, Pill } from '@/components/ui/Pill';
 import { Switch } from '@/components/ui/Switch';
+import { PendingApiBanner } from '@/components/ui/PendingApiBanner';
 import { useWarroom } from '@/lib/stores/warroom';
 
 const STATS = [
@@ -47,6 +48,10 @@ export default function ModerationPage() {
 
   return (
     <div className="flex flex-col h-full min-h-0">
+      <PendingApiBanner
+        endpoint="/moderation/suspects + /moderation/banned"
+        rationale="ต้อง flagging table + auto-rule engine ฝั่ง server (มี AI Sentiment Watcher แล้วแต่ admin API ยังไม่เปิด)"
+      />
       <header className="h-12 flex items-center border-b border-line bg-panel2/40 px-3 gap-3 shrink-0">
         <span className="dot dot-crit" />
         <span className="t-h text-crit">เฝ้าระวัง / แบน · MODERATION</span>
