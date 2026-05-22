@@ -68,11 +68,35 @@ export function EveAvatar({
               </>
             )}
             <div className="eve-avatar">
-              {/* Plain <img> — Next/Image was injecting width/height attrs that
-                  fought with our CSS sizing. */}
+              {/* Three masked copies of eve.svg stacked at the same position.
+                  Each mask shows only one anatomical band (head/torso/lower)
+                  with feathered edges that overlap so seams blend. Per-layer
+                  animations give the impression of a layered rig without
+                  actually splitting the source artwork.
+
+                  Browser fetches /assets/eve.svg ONCE (HTTP cache) — the three
+                  <img> tags share the cached response. Plain <img> (not
+                  next/image) because next/image was injecting width/height
+                  that fought with the absolute CSS sizing. */}
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                className="eve-avatar-img"
+                className="eve-layer eve-layer-lower"
+                src="/assets/eve.svg"
+                alt=""
+                aria-hidden
+                draggable={false}
+              />
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                className="eve-layer eve-layer-torso"
+                src="/assets/eve.svg"
+                alt=""
+                aria-hidden
+                draggable={false}
+              />
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                className="eve-layer eve-layer-head"
                 src="/assets/eve.svg"
                 alt="Eve"
                 draggable={false}

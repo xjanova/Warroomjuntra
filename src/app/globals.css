@@ -503,28 +503,120 @@ table.dense tbody tr.selected { background: rgba(34,211,238,.08); }
 @keyframes eve-rot { to { transform: translate(-50%, -50%) rotate(360deg); } }
 
 /* ============ AVATAR ============ */
+/* Wrapper: holds three masked copies of eve.svg + the HTML face overlay.
+   The "fake-layered" technique — render the same SVG three times, each clipped
+   to a different anatomical band by a feathered mask-image, then animate each
+   band on its own timing. Looks like a true layered rig, but is a single asset
+   the browser fetches once. */
 .eve-avatar {
   position: absolute; left: 50%; top: 50%;
   width: 200px; height: 200px;
   transform: translate(-50%, -50%);
-  animation: eve-breath 3.6s ease-in-out infinite;
+  /* Soft sway of the entire figure — gives the whole thing a gentle drift
+     while individual layers do their own thing on top. */
+  animation: eve-figure-sway 9s ease-in-out infinite;
+  /* Composite drop-shadow applied to the wrapper so all three layers share
+     one shadow instead of each casting its own banded shadow. */
+  filter: drop-shadow(0 8px 24px rgba(139, 92, 246, .45)) drop-shadow(0 0 18px rgba(196, 181, 253, .3));
 }
-@keyframes eve-breath {
-  0%, 100% { transform: translate(-50%, -50%) scale(1) translateY(0); }
-  50%      { transform: translate(-50%, -50%) scale(1.012) translateY(-2px); }
+@keyframes eve-figure-sway {
+  0%, 100% { transform: translate(-50%, -50%) translateX(0); }
+  50%      { transform: translate(-50%, -50%) translateX(1.5px); }
 }
 .eve-avatar-img {
+  /* Kept as a fallback class — no longer used directly. Each layer below
+     uses .eve-layer + the per-region class. */
   width: 100%; height: 100%;
   object-fit: contain;
-  filter: drop-shadow(0 8px 24px rgba(139, 92, 246, .45)) drop-shadow(0 0 18px rgba(196, 181, 253, .3));
   user-select: none;
   -webkit-user-drag: none;
+}
+
+/* Common shape for every masked copy of the SVG. */
+.eve-layer {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+  pointer-events: none;
+  will-change: transform;
+}
+
+/* HEAD + HAIR — top ~32% of the figure.
+   Bobs up/down + slight tilt. The face HTML overlay rides this same motion
+   via .eve-face below so eyes/mouth stay glued to the head. */
+.eve-layer-head {
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 26%, transparent 33%);
+          mask-image: linear-gradient(to bottom, #000 0%, #000 26%, transparent 33%);
+  -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+  -webkit-mask-size: 100% 100%;   mask-size: 100% 100%;
+  transform-origin: 50% 32%;
+  animation: eve-head-bob 4.2s ease-in-out infinite;
+}
+@keyframes eve-head-bob {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50%      { transform: translateY(-2px) rotate(.6deg); }
+}
+
+/* TORSO — middle band, 22-62%. This is the "breath" region.
+   Slightly different timing than the head so they don't lock-step. */
+.eve-layer-torso {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 22%, #000 28%, #000 55%, transparent 62%);
+          mask-image: linear-gradient(to bottom, transparent 22%, #000 28%, #000 55%, transparent 62%);
+  -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+  -webkit-mask-size: 100% 100%;   mask-size: 100% 100%;
+  transform-origin: 50% 58%;
+  animation: eve-torso-breath 3.6s ease-in-out infinite;
+}
+@keyframes eve-torso-breath {
+  0%, 100% { transform: scaleY(1) translateY(0); }
+  50%      { transform: scaleY(1.022) translateY(-1.5px); }
+}
+
+/* LOWER — dress/skirt region, 52-100%.
+   Slow sway from the waist pivot to suggest a draped garment. */
+.eve-layer-lower {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 52%, #000 60%, #000 100%);
+          mask-image: linear-gradient(to bottom, transparent 52%, #000 60%, #000 100%);
+  -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+  -webkit-mask-size: 100% 100%;   mask-size: 100% 100%;
+  transform-origin: 50% 55%;
+  animation: eve-lower-sway 7.2s ease-in-out infinite;
+}
+@keyframes eve-lower-sway {
+  0%, 100% { transform: rotate(0deg); }
+  50%      { transform: rotate(.8deg); }
+}
+
+/* Mood-driven overrides — these tweak per-layer motion without redefining
+   the keyframes. Tightened so they read clearly in the avatar context. */
+.eve[data-mood="talking"] .eve-layer-head {
+  animation: eve-head-bob 2.4s ease-in-out infinite;
+}
+.eve[data-mood="thinking"] .eve-layer-head {
+  animation: eve-head-bob 5.6s ease-in-out infinite, eve-head-tilt 3s ease-in-out infinite;
+}
+@keyframes eve-head-tilt {
+  0%, 100% { transform: translateY(-1px) rotate(-1.5deg); }
+  50%      { transform: translateY(-3px) rotate(1deg); }
+}
+.eve[data-mood="surprise"] .eve-layer-torso {
+  animation: eve-torso-breath 1.8s ease-in-out infinite;
+}
+.eve[data-mood="concerned"] .eve-layer-lower {
+  animation: eve-lower-sway 4.8s ease-in-out infinite;
 }
 
 /* ============ FACE OVERLAY ============ */
 .eve-face {
   position: absolute; inset: 0;
   pointer-events: none;
+  /* Glued to the head layer — same bob animation so eyes/mouth track the
+     SVG head wherever it moves. Without this the face floats statically
+     while the head rocks underneath, breaking the illusion. */
+  transform-origin: 50% 32%;
+  animation: eve-head-bob 4.2s ease-in-out infinite;
   /* Calibrated against eve.svg (full-body figure, face occupies top quarter).
      Tunable per-instance via React inline style on .eve-face. */
   --eye-y: 26%;
