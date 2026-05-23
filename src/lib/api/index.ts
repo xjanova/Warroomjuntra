@@ -117,3 +117,4 @@ export type { AdminDataResult, DataSource, UseAdminDataOptions } from './useAdmi
 export { useFortuneFeed } from './useFortuneFeed';
 export { useReadingDetail } from './useReadingDetail';
 export { useUserDetail } from './useUserDetail';
+export { getDeviceId, getDeviceName, setDeviceName, resetDeviceIdentity } from './device';

@@ -4,6 +4,7 @@ import { useSettings } from '@/lib/stores/settings';
 import { fetchMe, login, verifyTwoFactor } from './endpoints';
 import type { AdminMe } from './endpoints';
 import { describeError } from './errors';
+import { getDeviceId, getDeviceName } from './device';
 
 export type PairUser = { id: number | string; name: string; email?: string; role?: string };
 
@@ -83,13 +84,23 @@ export async function loginAndPair(input: { baseUrl: string; email: string; pass
   try {
     // baseUrlOverride routes the request through the right host without
     // mutating the store. The store only gets the success state via commitLogin.
-    const res = await login({ email, password }, { baseUrlOverride: baseUrl });
+    // device_id is required by the backend — every login is bound to a stable
+    // per-browser UUID so the admin can recognize/revoke tokens per device.
+    const res = await login(
+      {
+        email,
+        password,
+        device_id: getDeviceId(),
+        device_name: getDeviceName(),
+      },
+      { baseUrlOverride: baseUrl },
+    );
 
     // Discriminate on `token` (present in the success variant, absent in 2FA).
     if ('token' in res) {
       // Update store baseUrl now that we know it works
       useSettings.getState().setBaseUrl(baseUrl);
-      return commitLogin(res.token, res.user);
+      return commitLogin(res.token, res.admin);
     }
     // 2FA branch — caller will call verifyTwoFactorAndPair next. Store untouched.
     return { ok: false, requires_2fa: true, challenge_token: res.challenge_token };
@@ -99,7 +110,9 @@ export async function loginAndPair(input: { baseUrl: string; email: string; pass
   }
 }
 
-/** Second step of the 2FA flow — exchange challenge_token + code → real token. */
+/** Second step of the 2FA flow — exchange challenge_token + code → real token.
+ *  device_id is pulled from the cached challenge server-side, so we don't
+ *  send it again here. */
 export async function verifyTwoFactorAndPair(input: { baseUrl: string; challenge_token: string; code: string }): Promise<PairResult> {
   try {
     const res = await verifyTwoFactor(
@@ -107,7 +120,7 @@ export async function verifyTwoFactorAndPair(input: { baseUrl: string; challenge
       { baseUrlOverride: input.baseUrl },
     );
     useSettings.getState().setBaseUrl(input.baseUrl);
-    return commitLogin(res.token, res.user);
+    return commitLogin(res.token, res.admin);
   } catch (e) {
     return { ok: false, error: describeError(e) };
   }

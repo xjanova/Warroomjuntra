@@ -29,16 +29,27 @@ import type {
 // ---- Auth ------------------------------------------------------------------
 
 export async function fetchMe(opts?: { baseUrlOverride?: string; tokenOverride?: string }) {
-  return apiRequest<AdminMe>({
+  // Backend wraps in {admin: AdminUserResource}. Unwrap so callers see a flat AdminMe.
+  const res = await apiRequest<{ admin: AdminMe } | AdminMe>({
     path: '/auth/me',
     ...opts,
   });
+  return ('admin' in (res as object) ? (res as { admin: AdminMe }).admin : res) as AdminMe;
 }
 
-export type LoginPayload = { email: string; password: string };
+export type LoginPayload = {
+  email: string;
+  password: string;
+  device_id: string;     // required by backend — stable per-browser UUID
+  device_name?: string;  // optional human-readable label (max 100 chars)
+};
+
+// Mirrors backend AuthController response shape ({admin}, not {user}).
+// AdminUserResource exposes id/name/email/role/phone/avatar_url/permissions/
+// is_super_admin/two_factor — we only consume a subset via AdminMe.
 export type LoginResponse =
-  | { token: string; user: AdminMe }
-  | { requires_2fa: true; challenge_token: string };
+  | { token: string; admin: AdminMe; requires_2fa?: false }
+  | { requires_2fa: true; challenge_token: string; expires_in: number; method: string };
 
 // re-export common types so callers can import everything from '@/lib/api'
 export type { AdminMe } from './types';
@@ -54,7 +65,7 @@ export async function login(payload: LoginPayload, opts?: { baseUrlOverride?: st
 }
 
 export async function verifyTwoFactor(payload: { challenge_token: string; code: string }, opts?: { baseUrlOverride?: string }) {
-  return apiRequest<{ token: string; user: AdminMe }>({
+  return apiRequest<{ token: string; admin: AdminMe }>({
     method: 'POST',
     path: '/auth/verify-2fa',
     body: payload,
@@ -88,7 +99,7 @@ export async function pairCancel(code: string) {
 }
 
 export async function pairClaim(code: string) {
-  return apiRequest<{ token: string; user: AdminMe }>({
+  return apiRequest<{ token: string; admin: AdminMe }>({
     method: 'POST',
     path: '/auth/pair/claim',
     body: { pair_code: code },
