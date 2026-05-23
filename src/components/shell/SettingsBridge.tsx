@@ -20,9 +20,17 @@ export function SettingsBridge() {
     setWarroomRefresh(refreshInterval);
   }, [refreshInterval, setWarroomRefresh]);
 
-  // re-verify connection once on mount if we have credentials
+  // Re-verify connection once on mount if we have credentials AND haven't
+  // already verified. AuthGate now also kicks verifyConnection, so this
+  // mostly no-ops in the common path — but stays for safety (and for the
+  // "user hits a (warroom) route directly with already-paired state" case).
   useEffect(() => {
-    if (conn.baseUrl && conn.token && conn.status !== 'testing') {
+    if (
+      conn.baseUrl &&
+      conn.token &&
+      conn.status !== 'testing' &&
+      conn.status !== 'paired'
+    ) {
       void verifyConnection();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
