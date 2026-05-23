@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   FLOATING_BILLS,
   LEDGER,
@@ -12,15 +12,74 @@ import {
   type SmsRecord,
 } from '@/lib/mock/payment';
 import { ChannelChip, Pill } from '@/components/ui/Pill';
-import { PendingApiBanner } from '@/components/ui/PendingApiBanner';
+import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { useWarroom } from '@/lib/stores/warroom';
+import { useAdminData } from '@/lib/api/useAdminData';
+import {
+  fetchSmsInbox,
+  fetchPaymentReconStats,
+  matchSms,
+  rejectSms,
+} from '@/lib/api';
+import {
+  smsInboxToRecord,
+  reconStatsToKpis,
+} from '@/lib/adapters/payment-page';
 
 export default function PaymentPage() {
   const [tab, setTab] = useState<'match' | 'floating' | 'ledger'>('match');
-  const [sms, setSms] = useState<SmsRecord[]>(UNMATCHED_SMS);
-  const [bills, setBills] = useState<OpenBill[]>(OPEN_BILLS);
   const [selectedSmsId, setSelectedSmsId] = useState<string | null>(null);
   const pushToast = useWarroom((s) => s.pushToast);
+
+  // ── Live SMS inbox (pending only — what matters on this tab) ──
+  const smsFeed = useAdminData({
+    key: 'payment-sms-pending',
+    fetcher: () => fetchSmsInbox({ status: 'pending', per_page: 50 }),
+    mock: {
+      data: [] as Array<unknown>,
+      current_page: 1,
+      last_page: 1,
+      per_page: 50,
+      total: 0,
+    } as unknown as Awaited<ReturnType<typeof fetchSmsInbox>>,
+  });
+
+  // ── Live reconciliation stats (the 5 KPI tiles) ──
+  const stats = useAdminData({
+    key: 'payment-recon-stats',
+    fetcher: () => fetchPaymentReconStats(),
+    mock: null as unknown as Awaited<ReturnType<typeof fetchPaymentReconStats>>,
+  });
+
+  const sms: SmsRecord[] = useMemo(() => {
+    if (smsFeed.source === 'live' && smsFeed.data && typeof smsFeed.data === 'object' && 'data' in smsFeed.data) {
+      const items = (smsFeed.data as { data: unknown[] }).data;
+      if (Array.isArray(items) && items.length && typeof items[0] === 'object' && items[0] && 'sender_or_receiver' in (items[0] as object)) {
+        // Live shape — map server records to UI shape.
+        return items.map((it) => smsInboxToRecord(it as Parameters<typeof smsInboxToRecord>[0]));
+      }
+    }
+    // Mock fallback.
+    return UNMATCHED_SMS;
+  }, [smsFeed.source, smsFeed.data]);
+
+  // Open bills stay mock until we add a /payment/open-bills endpoint —
+  // operator can stub it in by extending PaymentReconController. The UI
+  // already renders fine with mock so we keep continuity.
+  const [bills, setBills] = useState<OpenBill[]>(OPEN_BILLS);
+  useEffect(() => {
+    // Re-seed when the user re-pairs — keeps mock fresh between sessions.
+    setBills(OPEN_BILLS);
+  }, []);
+
+  const kpis = useMemo(() => {
+    if (stats.source === 'live' && stats.data) {
+      return reconStatsToKpis(stats.data as Parameters<typeof reconStatsToKpis>[0]);
+    }
+    return PAYMENT_KPIS;
+  }, [stats.source, stats.data]);
+
+  const isLive = smsFeed.source === 'live';
 
   const selectedSms = sms.find((s) => s.id === selectedSmsId);
 
@@ -41,24 +100,55 @@ export default function PaymentPage() {
     return { sms: selectedSms, bill, delta: selectedSms.amount - bill.amount };
   }, [selectedSms, suggestedBillIds, bills]);
 
-  const matchBill = (billId: string) => {
+  // ── Live actions: match + reject ──
+  const matchBill = async (billId: string) => {
     if (!selectedSmsId) return;
     const bill = bills.find((b) => b.id === billId);
-    setBills((b) => b.filter((x) => x.id !== billId));
-    setSms((s) => s.filter((x) => x.id !== selectedSmsId));
+
+    if (isLive && selectedSmsId.startsWith('sms-')) {
+      const serverId = Number(selectedSmsId.replace('sms-', ''));
+      try {
+        const res = await matchSms(serverId);
+        if (res.sms.status === 'matched') {
+          pushToast({ kind: 'ok', title: 'จับคู่สำเร็จ', body: `SMS #${serverId} → bill #${res.sms.matched_transaction_id}` });
+        } else {
+          pushToast({ kind: 'warn', title: 'ยังไม่มีบิลตรง', body: `SMS #${serverId} ยังไม่จับคู่ได้ — รอบิลใหม่` });
+        }
+      } catch (e) {
+        pushToast({ kind: 'crit', title: 'จับคู่ล้มเหลว', body: String((e as Error).message) });
+      }
+      smsFeed.refetch?.();
+      stats.refetch?.();
+    } else {
+      // Mock branch — keep continuity for unpaired UI.
+      setBills((b) => b.filter((x) => x.id !== billId));
+      pushToast({ kind: 'ok', title: 'จับคู่สำเร็จ (mock)', body: bill ? `${bill.id} · ${bill.customer}` : billId });
+    }
     setSelectedSmsId(null);
-    pushToast({ kind: 'ok', title: 'จับคู่สำเร็จ', body: bill ? `${bill.id} · ${bill.customer}` : billId });
+  };
+
+  const rejectSelectedSms = async () => {
+    if (!selectedSmsId) return;
+    if (isLive && selectedSmsId.startsWith('sms-')) {
+      const serverId = Number(selectedSmsId.replace('sms-', ''));
+      try {
+        await rejectSms(serverId, 'rejected_from_warroom');
+        pushToast({ kind: 'ok', title: 'เพิกเฉย SMS แล้ว', body: `SMS #${serverId}` });
+      } catch (e) {
+        pushToast({ kind: 'crit', title: 'reject ล้มเหลว', body: String((e as Error).message) });
+      }
+      smsFeed.refetch?.();
+      stats.refetch?.();
+    }
+    setSelectedSmsId(null);
   };
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      <PendingApiBanner
-        endpoint="/sms/inbox + /reconcile/match"
-        rationale="ต้อง parser SMS ธนาคารฝั่ง server + endpoint จับคู่บิล ↔ ยอดโอน"
-      />
       <header className="h-12 flex items-center border-b border-line bg-panel2/40 px-3 gap-3 shrink-0">
         <span className="dot dot-ok" />
         <span className="t-h">กระทบยอดการเงิน · RECONCILIATION</span>
+        <DataSourceBadge source={smsFeed.source} />
         <span className="text-2xs text-mute mono">21 พ.ค. 69</span>
         <div className="flex-1" />
         <span className="text-2xs text-mute">มีเชื่อมต่อ SMS Parser</span>
@@ -74,7 +164,7 @@ export default function PaymentPage() {
 
       <section className="px-3 py-2 border-b border-line shrink-0">
         <div className="grid grid-cols-5 gap-2">
-          {PAYMENT_KPIS.map((k) => (
+          {kpis.map((k) => (
             <div key={k.label} className="panel px-3 py-2">
               <div className="t-h">{k.label}</div>
               <div className="mono text-2xl font-semibold mt-1" style={{ color: k.color }}>{k.value}</div>
@@ -145,7 +235,18 @@ export default function PaymentPage() {
                       {s.ref !== '—' && <> · ref {s.ref}</>}
                     </div>
                   </div>
-                  <button onClick={(e) => e.stopPropagation()} className="btn btn-crit text-2xs">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (selectedSmsId === s.id) {
+                        void rejectSelectedSms();
+                      } else {
+                        setSelectedSmsId(s.id);
+                        setTimeout(() => void rejectSelectedSms(), 50);
+                      }
+                    }}
+                    className="btn btn-crit text-2xs"
+                  >
                     เพิกเฉย
                   </button>
                 </div>

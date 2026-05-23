@@ -51,8 +51,32 @@ export {
   fetchRanks,
   fetchMarketplaceDashboard,
   fetchMarketplaceOrders,
+  fetchUserReadings,
+  fetchAdminsOnline,
+  fetchSmsInbox,
+  fetchPaymentReconStats,
+  matchSms,
+  rejectSms,
+  fetchModerationSuspects,
+  fetchModerationBanned,
+  banUser,
+  unbanUser,
+  fetchModerationRules,
+  updateModerationRules,
+  fetchPlaygroundProviders,
+  runPlayground,
 } from './endpoints';
-export type { AdminMe, LoginPayload, LoginResponse } from './endpoints';
+export type {
+  AdminMe,
+  LoginPayload,
+  LoginResponse,
+  AdminPresence,
+  SmsInboxItem,
+  ModerationSuspect,
+  ModerationBan,
+  PlaygroundProvider,
+  PlaygroundResult,
+} from './endpoints';
 export type {
   DashboardResponse,
   DashboardHero,

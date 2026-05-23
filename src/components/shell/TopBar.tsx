@@ -1,10 +1,10 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Search, Pause, Play, VolumeX, Volume2, Focus, Maximize2, RefreshCw } from 'lucide-react';
 import { useWarroom } from '@/lib/stores/warroom';
 import { useSettings, isPaired } from '@/lib/stores/settings';
-import { verifyConnection, refreshAll } from '@/lib/api';
+import { verifyConnection, refreshAll, fetchAdminsOnline, type AdminPresence } from '@/lib/api';
 import { Kbd } from '@/components/ui/Kbd';
 import { formatClock, formatThaiDate, cn } from '@/lib/utils';
 
@@ -38,6 +38,35 @@ export function TopBar() {
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
   }, [setClock, frozen]);
+
+  // Live presence — poll admins/online every 30s. Only when paired.
+  const [livePresence, setLivePresence] = useState<AdminPresence[]>([]);
+  useEffect(() => {
+    if (!paired) {
+      setLivePresence([]);
+      return;
+    }
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const res = await fetchAdminsOnline();
+        if (!cancelled) setLivePresence(res.data ?? []);
+      } catch {
+        if (!cancelled) setLivePresence([]);
+      }
+    };
+    void tick();
+    const id = setInterval(tick, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [paired]);
+
+  // Show live data when paired; fall back to mock presence otherwise.
+  const presenceRows = paired && livePresence.length > 0
+    ? livePresence.map((u) => ({ id: String(u.id), initial: u.initials, online: u.is_online, name: u.name, role: u.role }))
+    : presence;
 
   return (
     <header className={cn(
@@ -161,7 +190,7 @@ export function TopBar() {
 
       {/* Presence */}
       <div className="flex items-center -space-x-1">
-        {presence.map((u) => (
+        {presenceRows.map((u) => (
           <span
             key={u.id}
             className={cn(

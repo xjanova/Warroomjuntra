@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   BANNED,
   MOD_TABS,
@@ -14,47 +14,147 @@ import {
 } from '@/lib/mock/moderation';
 import { ChannelChip, Pill } from '@/components/ui/Pill';
 import { Switch } from '@/components/ui/Switch';
-import { PendingApiBanner } from '@/components/ui/PendingApiBanner';
+import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { useWarroom } from '@/lib/stores/warroom';
-
-const STATS = [
-  { label: 'เฝ้าระวังทั้งหมด', value: '42', sub: '+5 ใน 24 ชม.', color: '#e5e7eb', subColor: '#f59e0b' },
-  { label: 'ระดับสงสัย', value: '28', sub: 'รอแอดมินรีวิว', color: '#f59e0b', subColor: '#6b7280' },
-  { label: 'ใกล้แบน', value: '9', sub: 'ต้องตัดสินใจ', color: '#f43f5e', subColor: '#f43f5e' },
-  { label: 'แบนแล้ว', value: '147', sub: 'ตลอดเดือนนี้', color: '#ef4444', subColor: '#6b7280', glow: true },
-  { label: 'บัญชีลึกลับ (multi)', value: '12', sub: 'เปิดหลายบัญชี', color: '#8b5cf6', subColor: '#8b5cf6' },
-];
+import { useAdminData } from '@/lib/api/useAdminData';
+import {
+  fetchModerationSuspects,
+  fetchModerationBanned,
+  banUser,
+  unbanUser,
+} from '@/lib/api';
+import {
+  suspectFromServer,
+  bannedFromServer,
+  moderationStatsFromServer,
+} from '@/lib/adapters/moderation-page';
 
 export default function ModerationPage() {
   const [tab, setTab] = useState<'list' | 'banned' | 'rules'>('list');
   const [search, setSearch] = useState('');
   const [channelFilter, setChannelFilter] = useState('');
-  const [active, setActive] = useState<Suspect | null>(SUSPECTS[0]);
   const pushToast = useWarroom((s) => s.pushToast);
+
+  // ── Live moderation data ──
+  const suspectsFeed = useAdminData({
+    key: 'moderation-suspects',
+    fetcher: () => fetchModerationSuspects({ since_hours: 24, per_page: 50 }),
+    mock: null as unknown as Awaited<ReturnType<typeof fetchModerationSuspects>>,
+  });
+  const bannedFeed = useAdminData({
+    key: 'moderation-banned',
+    fetcher: () => fetchModerationBanned({ active_only: true, per_page: 50 }),
+    mock: null as unknown as Awaited<ReturnType<typeof fetchModerationBanned>>,
+  });
+
+  const liveSuspects: Suspect[] = useMemo(() => {
+    if (suspectsFeed.source === 'live' && suspectsFeed.data) {
+      const items = (suspectsFeed.data as { data?: unknown[] }).data ?? [];
+      return Array.isArray(items)
+        ? items.map((it) => suspectFromServer(it as Parameters<typeof suspectFromServer>[0]))
+        : [];
+    }
+    return SUSPECTS;
+  }, [suspectsFeed.source, suspectsFeed.data]);
+
+  const liveBanned = useMemo(() => {
+    if (bannedFeed.source === 'live' && bannedFeed.data) {
+      const items = (bannedFeed.data as { data?: unknown[] }).data ?? [];
+      return Array.isArray(items)
+        ? items.map((it) => bannedFromServer(it as Parameters<typeof bannedFromServer>[0]))
+        : [];
+    }
+    return BANNED;
+  }, [bannedFeed.source, bannedFeed.data]);
+
+  const STATS = useMemo(() => {
+    if (suspectsFeed.source === 'live') {
+      const suspectsServer = ((suspectsFeed.data as { data?: unknown[] })?.data ?? []) as Parameters<typeof moderationStatsFromServer>[0]['suspects'];
+      const bannedTotal = bannedFeed.source === 'live'
+        ? Number((bannedFeed.data as { total?: number })?.total ?? liveBanned.length)
+        : liveBanned.length;
+      return moderationStatsFromServer({
+        suspectsTotal: Number((suspectsFeed.data as { total?: number })?.total ?? liveSuspects.length),
+        suspects: suspectsServer,
+        bannedTotal,
+      });
+    }
+    return [
+      { label: 'เฝ้าระวังทั้งหมด', value: '42', sub: '+5 ใน 24 ชม.', color: '#e5e7eb', subColor: '#f59e0b', glow: false },
+      { label: 'ระดับสงสัย', value: '28', sub: 'รอแอดมินรีวิว', color: '#f59e0b', subColor: '#6b7280', glow: false },
+      { label: 'ใกล้แบน', value: '9', sub: 'ต้องตัดสินใจ', color: '#f43f5e', subColor: '#f43f5e', glow: false },
+      { label: 'แบนแล้ว', value: '147', sub: 'ตลอดเดือนนี้', color: '#ef4444', subColor: '#6b7280', glow: true },
+      { label: 'บัญชีลึกลับ (multi)', value: '12', sub: 'เปิดหลายบัญชี', color: '#8b5cf6', subColor: '#8b5cf6', glow: false },
+    ];
+  }, [suspectsFeed, bannedFeed, liveSuspects.length, liveBanned.length]);
+
+  const [active, setActive] = useState<Suspect | null>(null);
+  // Re-pin active when the live feed reshuffles and old `active` is gone.
+  // Done in useEffect (NOT in render body) to avoid the "Cannot update a
+  // component while rendering" warning.
+  useEffect(() => {
+    if (!active && liveSuspects.length > 0) {
+      setActive(liveSuspects[0]);
+      return;
+    }
+    if (active && !liveSuspects.find((s) => s.id === active.id)) {
+      setActive(liveSuspects[0] ?? null);
+    }
+  }, [liveSuspects, active]);
 
   const filtered = useMemo(
     () =>
-      SUSPECTS.filter((s) => {
+      liveSuspects.filter((s) => {
         if (channelFilter && s.channel !== channelFilter) return false;
         if (search && !(s.name + s.psid).toLowerCase().includes(search.toLowerCase())) return false;
         return true;
       }),
-    [search, channelFilter],
+    [search, channelFilter, liveSuspects],
   );
 
-  const act = (label: string) => {
-    if (active) pushToast({ kind: 'crit', title: label, body: active.name });
+  const isLive = suspectsFeed.source === 'live';
+
+  const act = async (label: string) => {
+    if (!active) return;
+    pushToast({ kind: 'crit', title: label, body: active.name });
+
+    if (isLive && label.includes('แบน')) {
+      try {
+        await banUser({
+          platform: active.channel === 'LINE' ? 'line' : 'facebook',
+          platform_user_id: active.psid,
+          display_name: active.name,
+          reason: active.reasons.join(', '),
+        });
+        pushToast({ kind: 'ok', title: 'แบนผู้ใช้สำเร็จ', body: active.name });
+        bannedFeed.refetch?.();
+        suspectsFeed.refetch?.();
+      } catch (e) {
+        pushToast({ kind: 'crit', title: 'แบนไม่สำเร็จ', body: String((e as Error).message) });
+      }
+    }
+  };
+
+  const handleUnban = async (id: string) => {
+    if (isLive) {
+      try {
+        await unbanUser(Number(id));
+        pushToast({ kind: 'ok', title: 'ปลดแบนแล้ว', body: `Ban #${id}` });
+        bannedFeed.refetch?.();
+      } catch (e) {
+        pushToast({ kind: 'crit', title: 'ปลดแบนไม่สำเร็จ', body: String((e as Error).message) });
+      }
+    } else {
+      pushToast({ kind: 'ok', title: 'ปลดแบนแล้ว (mock)', body: `Ban #${id}` });
+    }
   };
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      <PendingApiBanner
-        endpoint="/moderation/suspects + /moderation/banned"
-        rationale="ต้อง flagging table + auto-rule engine ฝั่ง server (มี AI Sentiment Watcher แล้วแต่ admin API ยังไม่เปิด)"
-      />
       <header className="h-12 flex items-center border-b border-line bg-panel2/40 px-3 gap-3 shrink-0">
         <span className="dot dot-crit" />
         <span className="t-h text-crit">เฝ้าระวัง / แบน · MODERATION</span>
+        <DataSourceBadge source={suspectsFeed.source} />
       </header>
 
       <section className="px-3 py-2 border-b border-line shrink-0">
@@ -302,7 +402,7 @@ export default function ModerationPage() {
               </tr>
             </thead>
             <tbody>
-              {BANNED.map((b) => (
+              {liveBanned.map((b) => (
                 <tr key={b.id}>
                   <td>
                     <div className="flex items-center gap-2">
@@ -321,7 +421,7 @@ export default function ModerationPage() {
                     {b.permanent ? 'ถาวร' : b.endsAt}
                   </td>
                   <td className="text-right">
-                    <button className="btn btn-ok">ปลดแบน</button>
+                    <button className="btn btn-ok" onClick={() => handleUnban(b.id)}>ปลดแบน</button>
                   </td>
                 </tr>
               ))}

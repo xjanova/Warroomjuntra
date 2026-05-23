@@ -3,9 +3,11 @@
 import { useState } from 'react';
 import { Pill } from '@/components/ui/Pill';
 import { Kbd } from '@/components/ui/Kbd';
-import { PendingApiBanner } from '@/components/ui/PendingApiBanner';
+import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { useWarroom } from '@/lib/stores/warroom';
 import { cn } from '@/lib/utils';
+import { useSettings } from '@/lib/stores/settings';
+import { runPlayground } from '@/lib/api';
 
 type Provider = {
   id: string;
@@ -42,32 +44,64 @@ export default function PredictPage() {
   const [selectedTemplate, setSelectedTemplate] = useState(TEMPLATES[0]);
   const [prompt, setPrompt] = useState(TEMPLATES[0].prompt);
   const [active, setActive] = useState<Record<string, boolean>>({ gemini: true, groq: true, qwen: false });
-  const [results, setResults] = useState<Record<string, string>>({});
+  const [results, setResults] = useState<Record<string, { text: string; latencyMs: number; error?: string }>>({});
   const [running, setRunning] = useState(false);
   const pushToast = useWarroom((s) => s.pushToast);
+  const isPaired = useSettings((s) => s.connection.status === 'paired');
 
-  const run = () => {
+  // Map UI provider id → backend provider name used by FortuneAIService.
+  const providerMap: Record<string, { provider: string; model: string }> = {
+    gemini: { provider: 'gemini', model: 'gemini-2.0-flash-exp' },
+    groq: { provider: 'groq', model: 'llama-3.3-70b-versatile' },
+    qwen: { provider: 'qwen', model: 'qwen-2.5-72b-instruct' },
+  };
+
+  const run = async () => {
     setRunning(true);
     setResults({});
     const enabled = PROVIDERS.filter((p) => active[p.id]);
-    enabled.forEach((p, i) => {
-      setTimeout(() => {
-        setResults((r) => ({ ...r, [p.id]: SAMPLE_RESULTS[p.id] }));
-        if (i === enabled.length - 1) setRunning(false);
-      }, 600 + i * 800);
-    });
+
+    if (isPaired) {
+      // Live — hit /api/admin/ai/playground/run with the selected providers.
+      try {
+        const res = await runPlayground({
+          system_prompt: 'คุณคือผู้เชี่ยวชาญด้านการดูดวงและให้คำปรึกษาด้านจิตวิญญาณ ตอบเป็นภาษาไทยอย่างเป็นกันเอง',
+          user_message: prompt,
+          providers: enabled.map((p) => providerMap[p.id]),
+        });
+        const map: typeof results = {};
+        for (const result of res.results) {
+          const uiId = enabled.find((p) => providerMap[p.id].provider === result.provider)?.id ?? result.provider;
+          map[uiId] = {
+            text: result.success ? (result.response ?? '(empty)') : '',
+            latencyMs: result.latency_ms,
+            error: result.success ? undefined : (result.error ?? 'unknown error'),
+          };
+        }
+        setResults(map);
+      } catch (e) {
+        pushToast({ kind: 'crit', title: 'รันทดสอบล้มเหลว', body: String((e as Error).message) });
+      } finally {
+        setRunning(false);
+      }
+    } else {
+      // Unpaired — keep the original mock sequential reveal for demo continuity.
+      enabled.forEach((p, i) => {
+        setTimeout(() => {
+          setResults((r) => ({ ...r, [p.id]: { text: SAMPLE_RESULTS[p.id], latencyMs: 600 + i * 800 } }));
+          if (i === enabled.length - 1) setRunning(false);
+        }, 600 + i * 800);
+      });
+    }
   };
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      <PendingApiBanner
-        endpoint="/ai/playground/run (3 providers parallel)"
-        rationale="ต้อง endpoint run prompt → providers ทั้ง 3 ตัวพร้อมกัน ฝั่งนี้เป็น UI shell อย่างเดียว"
-      />
       <header className="h-12 flex items-center border-b border-line bg-panel2/40 px-3 gap-3 shrink-0">
         <span className="dot dot-mystic" />
         <span className="t-h">Workbench · ทดสอบทำนาย</span>
         <Pill tone="mystic">A/B test · กับ 3 providers</Pill>
+        <DataSourceBadge source={isPaired ? 'live' : 'mock'} />
         <div className="flex-1" />
         <button
           onClick={() => pushToast({ kind: 'mystic', title: 'บันทึก preset แล้ว', body: selectedTemplate.name })}
@@ -179,12 +213,13 @@ export default function PredictPage() {
                   <span className="text-sm font-semibold text-fg">{p.label}</span>
                   <span className="text-2xs text-mute mono">{p.model}</span>
                   <div className="flex-1" />
-                  {results[p.id] && (
+                  {results[p.id] && !results[p.id].error && (
                     <>
-                      <Pill tone="ok">{p.latency}</Pill>
+                      <Pill tone="ok">{results[p.id].latencyMs}ms</Pill>
                       <Pill tone="dim">{p.cost}</Pill>
                     </>
                   )}
+                  {results[p.id]?.error && <Pill tone="crit">ERROR</Pill>}
                 </div>
                 <div className="p-3 flex-1 overflow-y-auto min-h-0 text-sm leading-relaxed text-fg whitespace-pre-wrap">
                   {running && !results[p.id] && (
@@ -197,7 +232,13 @@ export default function PredictPage() {
                       กำลังประมวลผล...
                     </div>
                   )}
-                  {results[p.id] && results[p.id]}
+                  {results[p.id]?.error && (
+                    <div className="text-crit text-xs">
+                      <div className="font-semibold mb-1">เรียก provider ไม่สำเร็จ</div>
+                      <div className="mono text-2xs text-mute">{results[p.id].error}</div>
+                    </div>
+                  )}
+                  {results[p.id] && !results[p.id].error && results[p.id].text}
                   {!running && !results[p.id] && <div className="text-mute text-xs">กดปุ่ม ▶ รันทดสอบ เพื่อเริ่มต้น</div>}
                 </div>
                 {results[p.id] && (

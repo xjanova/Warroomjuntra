@@ -329,6 +329,258 @@ export async function fetchRanks() {
   }>>({ path: '/ranks' });
 }
 
+// ---- User detail extras (Customer 360 drawer) -----------------------------
+
+export async function fetchUserReadings(id: string | number, params?: { per_page?: number }) {
+  const qs = toQuery(params);
+  return apiRequest<{
+    data: Array<{
+      id: number;
+      questions: string[];
+      ai_provider: string;
+      ai_model: string | null;
+      tokens_used: number | null;
+      is_paid: boolean;
+      price_paid_thb: number | null;
+      rating: number | null;
+      response_type: string;
+      paid_at: string | null;
+      responded_at: string | null;
+      created_at: string;
+    }>;
+    total: number;
+  }>({ path: `/users/${id}/readings${qs}` });
+}
+
+// ---- Live presence (TopBar avatar strip) ----------------------------------
+
+export type AdminPresence = {
+  id: number;
+  name: string;
+  email: string | null;
+  avatar: string | null;
+  role: string;
+  last_seen_at: string | null;
+  is_online: boolean;
+  initials: string;
+};
+
+export async function fetchAdminsOnline() {
+  return apiRequest<{
+    data: AdminPresence[];
+    online_count: number;
+    window_minutes: number;
+    generated_at: string;
+  }>({ path: '/users/admins/online' });
+}
+
+// ---- Payment Reconciliation (Warroom /payment) ----------------------------
+
+export type SmsInboxItem = {
+  id: number;
+  bank: string;
+  type: 'credit' | 'debit';
+  amount: number;
+  account_number: string | null;
+  sender_or_receiver: string | null;
+  reference_number: string | null;
+  sms_timestamp: string | null;
+  device_id: string;
+  status: 'pending' | 'matched' | 'confirmed' | 'rejected' | 'expired';
+  matched_transaction_id: number | null;
+  created_at: string | null;
+  matched_bill: {
+    id: number;
+    user_id: number | null;
+    amount: number;
+    status: string;
+    payment_method: string;
+    created_at: string | null;
+  } | null;
+};
+
+export async function fetchSmsInbox(params?: {
+  status?: SmsInboxItem['status'];
+  bank?: string;
+  date_from?: string;
+  date_to?: string;
+  search?: string;
+  per_page?: number;
+  page?: number;
+}) {
+  const qs = toQuery(params);
+  return apiRequest<{
+    data: SmsInboxItem[];
+    current_page: number;
+    last_page: number;
+    per_page: number;
+    total: number;
+  }>({ path: `/payment/sms/inbox${qs}` });
+}
+
+export async function fetchPaymentReconStats() {
+  return apiRequest<{
+    today: { total: number; matched: number; pending: number; match_rate_pct: number };
+    week_by_status: Record<string, { count: number; amount_sum_thb: number }>;
+    generated_at: string;
+  }>({ path: '/payment/recon/stats' });
+}
+
+export async function matchSms(id: number) {
+  return apiRequest<{ sms: SmsInboxItem }>({
+    method: 'POST',
+    path: `/payment/sms/${id}/match`,
+  });
+}
+
+export async function rejectSms(id: number, reason?: string) {
+  return apiRequest<{ sms: SmsInboxItem }>({
+    method: 'POST',
+    path: `/payment/sms/${id}/reject`,
+    body: reason ? { reason } : {},
+  });
+}
+
+// ---- Moderation (Warroom /moderation) -------------------------------------
+
+export type ModerationSuspect = {
+  reading_id: number;
+  user_id: number | null;
+  platform_user_id: string | null;
+  display_name: string | null;
+  response_type: string;
+  is_paid: boolean;
+  rating: number | null;
+  created_at: string;
+  matched_keywords: string[];
+  score: number;
+  flags: string[];
+  preview: string;
+};
+
+export type ModerationBan = {
+  id: number;
+  platform: 'facebook' | 'line';
+  platform_user_id: string;
+  display_name: string | null;
+  reason: string | null;
+  banned_until: string | null;
+  is_permanent: boolean;
+  is_active: boolean;
+  attempt_count: number;
+  notify_count: number;
+  last_notified_at: string | null;
+  banned_by: { id: number; name: string; email: string | null } | null;
+  created_at: string | null;
+};
+
+export async function fetchModerationSuspects(params?: { since_hours?: number; min_score?: number; per_page?: number }) {
+  const qs = toQuery(params);
+  return apiRequest<{
+    data: ModerationSuspect[];
+    total: number;
+    window_hours: number;
+    keywords_used: string[];
+    generated_at: string;
+  }>({ path: `/moderation/suspects${qs}` });
+}
+
+export async function fetchModerationBanned(params?: {
+  platform?: 'facebook' | 'line';
+  search?: string;
+  active_only?: boolean;
+  per_page?: number;
+  page?: number;
+}) {
+  const qs = toQuery(params);
+  return apiRequest<{
+    data: ModerationBan[];
+    current_page: number;
+    last_page: number;
+    per_page: number;
+    total: number;
+  }>({ path: `/moderation/banned${qs}` });
+}
+
+export async function banUser(payload: {
+  platform: 'facebook' | 'line';
+  platform_user_id: string;
+  display_name?: string;
+  reason?: string;
+  banned_until?: string | null;
+}) {
+  return apiRequest<{ ban: ModerationBan }>({
+    method: 'POST',
+    path: '/moderation/ban',
+    body: payload,
+  });
+}
+
+export async function unbanUser(banId: number) {
+  return apiRequest<{ ban: ModerationBan }>({
+    method: 'POST',
+    path: `/moderation/unban/${banId}`,
+  });
+}
+
+export async function fetchModerationRules() {
+  return apiRequest<{
+    default_keywords: string[];
+    extra_keywords: string[];
+    all_keywords: string[];
+  }>({ path: '/moderation/rules' });
+}
+
+export async function updateModerationRules(extraKeywords: string[]) {
+  return apiRequest<{ extra_keywords: string[] }>({
+    method: 'PUT',
+    path: '/moderation/rules',
+    body: { extra_keywords: extraKeywords },
+  });
+}
+
+// ---- AI Playground (Warroom /predict) -------------------------------------
+
+export type PlaygroundProvider = {
+  id: number;
+  name: string;
+  display_name: string;
+  provider_type: string;
+  models: Array<{ id: number; name: string; display_name: string | null; context_window: number | null }>;
+};
+
+export type PlaygroundResult = {
+  provider: string;
+  model: string | null;
+  success: boolean;
+  latency_ms: number;
+  response: string | null;
+  tokens: number | null;
+  error: string | null;
+};
+
+export async function fetchPlaygroundProviders() {
+  return apiRequest<{ providers: PlaygroundProvider[] }>({ path: '/ai/playground/providers' });
+}
+
+export async function runPlayground(payload: {
+  system_prompt: string;
+  user_message: string;
+  providers: Array<{
+    provider: string;
+    model?: string;
+    api_key?: string;
+    temperature?: number;
+    max_tokens?: number;
+  }>;
+}) {
+  return apiRequest<{ results: PlaygroundResult[]; generated_at: string }>({
+    method: 'POST',
+    path: '/ai/playground/run',
+    body: payload,
+  });
+}
+
 // ---- Marketplace (read-only — out of warroom's primary scope) --------------
 
 export async function fetchMarketplaceDashboard() {

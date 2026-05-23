@@ -1,8 +1,9 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useWarroom } from '@/lib/stores/warroom';
 import { useUserDetail } from '@/lib/api';
+import { fetchUserReadings } from '@/lib/api';
 import { DrawerShell } from './DrawerShell';
 import { Pill } from '@/components/ui/Pill';
 import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
@@ -42,6 +43,45 @@ export function Customer360Drawer() {
 
   const isLive = !!card;
   const sentimentSeries = isLive ? SENTIMENT_NEUTRAL : SENTIMENT_30D;
+
+  // ── Live recent readings for this user ──
+  const [readings, setReadings] = useState<Array<{
+    id: number;
+    title: string;
+    when: string;
+    tone: 'mystic' | 'info';
+  }>>([]);
+  useEffect(() => {
+    let cancelled = false;
+    if (!numericId) {
+      setReadings([]);
+      return;
+    }
+    fetchUserReadings(numericId, { per_page: 10 })
+      .then((res) => {
+        if (cancelled) return;
+        const mapped = (res.data ?? []).map((r) => {
+          const isCeltic = (r.response_type ?? '').toLowerCase().includes('celtic');
+          const firstQ = Array.isArray(r.questions) && r.questions.length ? r.questions[0] : 'คำถามทั่วไป';
+          const title = (isCeltic ? 'Celtic Cross' : (r.is_paid ? 'ดูดวงพรีเมียม' : 'ดูดวงทั่วไป')) +
+            ' — "' + (firstQ.length > 40 ? firstQ.slice(0, 38) + '…' : firstQ) + '"';
+          return {
+            id: r.id,
+            title,
+            when: r.created_at ? new Date(r.created_at).toLocaleString('th-TH', { dateStyle: 'short', timeStyle: 'short' }) : '—',
+            tone: isCeltic ? ('mystic' as const) : ('info' as const),
+          };
+        });
+        setReadings(mapped);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setReadings([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [numericId]);
 
   return (
     <DrawerShell open={!!customerDrawerId} onClose={closeCustomerDrawer}>
@@ -171,24 +211,33 @@ export function Customer360Drawer() {
             <div className="panel">
               <div className="px-3 py-2 border-b border-line flex items-center gap-2">
                 <span className="t-h">ประวัติดูดวง · ล่าสุด</span>
-                {isLive && <span className="text-2xs text-mute">(รอ endpoint /users/{`{id}`}/readings)</span>}
+                {isLive && readings.length === 0 && (
+                  <span className="text-2xs text-mute">(ไม่มีประวัติ)</span>
+                )}
               </div>
               <div className="divide-y divide-lined text-xs">
-                <div className="flex items-center gap-3 px-3 py-2">
-                  <span className="dot dot-mystic" />
-                  <span className="flex-1 text-fg">Celtic Cross — &quot;ความรักหลังเลิกแฟน&quot;</span>
-                  <span className="mono text-2xs text-mute">วันนี้ 14:18</span>
-                </div>
-                <div className="flex items-center gap-3 px-3 py-2">
-                  <span className="dot dot-info" />
-                  <span className="flex-1 text-fg">ดูดวงเร่งด่วน — &quot;งานใหม่ที่สมัคร&quot;</span>
-                  <span className="mono text-2xs text-mute">เมื่อวาน</span>
-                </div>
-                <div className="flex items-center gap-3 px-3 py-2">
-                  <span className="dot dot-info" />
-                  <span className="flex-1 text-fg">ไพ่ทาโรต์ 3 ใบ — &quot;การเงินไตรมาส&quot;</span>
-                  <span className="mono text-2xs text-mute">3 วันก่อน</span>
-                </div>
+                {readings.length > 0 ? (
+                  readings.map((r) => (
+                    <div key={r.id} className="flex items-center gap-3 px-3 py-2">
+                      <span className={`dot dot-${r.tone}`} />
+                      <span className="flex-1 text-fg">{r.title}</span>
+                      <span className="mono text-2xs text-mute">{r.when}</span>
+                    </div>
+                  ))
+                ) : (
+                  <>
+                    <div className="flex items-center gap-3 px-3 py-2">
+                      <span className="dot dot-mystic" />
+                      <span className="flex-1 text-fg">Celtic Cross — &quot;ความรักหลังเลิกแฟน&quot;</span>
+                      <span className="mono text-2xs text-mute">วันนี้ 14:18</span>
+                    </div>
+                    <div className="flex items-center gap-3 px-3 py-2">
+                      <span className="dot dot-info" />
+                      <span className="flex-1 text-fg">ดูดวงเร่งด่วน — &quot;งานใหม่ที่สมัคร&quot;</span>
+                      <span className="mono text-2xs text-mute">เมื่อวาน</span>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           </>
