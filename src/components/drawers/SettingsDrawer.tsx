@@ -38,7 +38,6 @@ import {
   LayoutGrid,
   Clock,
   Wrench,
-  ExternalLink,
   RefreshCw,
   Eye,
   EyeOff,
@@ -292,16 +291,6 @@ function ConnectTab() {
                 <Plug size={12} />
                 {conn.status === 'paired' && !dirty ? 'ทดสอบใหม่' : 'เชื่อมต่อด้วย Token'}
               </button>
-              <div className="flex-1" />
-              <a
-                href="https://github.com/xjanova/Thaiprompt-Affiliate#admin-api"
-                target="_blank"
-                rel="noreferrer"
-                className="btn btn-ghost"
-              >
-                <ExternalLink size={12} />
-                วิธีออก token
-              </a>
             </div>
           </div>
         )}

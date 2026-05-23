@@ -15,7 +15,7 @@ import {
 import { EveAvatar } from '@/components/eve/EveAvatar';
 import { Pill } from '@/components/ui/Pill';
 import { cn } from '@/lib/utils';
-import { Eye, EyeOff, LogIn, ShieldCheck, Plug, ExternalLink } from 'lucide-react';
+import { Eye, EyeOff, LogIn, ShieldCheck, Plug } from 'lucide-react';
 
 const ENDPOINT_SUGGESTIONS = [
   'https://thaiprompt.online/api/admin',
@@ -222,14 +222,9 @@ export default function LoginPage() {
         </div>
 
         <footer className="px-6 md:px-10 pb-5 text-center">
-          <a
-            href="https://github.com/xjanova/Thaiprompt-Affiliate#admin-api"
-            target="_blank"
-            rel="noreferrer"
-            className="text-2xs text-mute hover:text-mystic inline-flex items-center gap-1"
-          >
-            <ExternalLink size={10} /> เอกสาร Admin API
-          </a>
+          <div className="text-2xs text-mute">
+            Warroom Juntra · Mission Control
+          </div>
         </footer>
       </section>
 
