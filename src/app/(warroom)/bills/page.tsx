@@ -4,10 +4,16 @@ import { useEffect, useMemo, useState } from 'react';
 import { BILLS, billStatusLabel, billStatusTone, type Bill } from '@/lib/mock/bills';
 import { ChannelChip, Pill } from '@/components/ui/Pill';
 import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
+import { PromptPayQR } from '@/components/ui/PromptPayQR';
 import { useWarroom } from '@/lib/stores/warroom';
 import { useFortuneFeed, markReadingPaid, refundReading, cancelReading, describeError } from '@/lib/api';
 import { useSettings, isPaired as isPairedFn } from '@/lib/stores/settings';
 import { readingToBill } from '@/lib/adapters/bills';
+
+// PromptPay receiver — same number Fortune Bot quotes to customers in the chat
+// composer (see chat/page.tsx). TODO: move to Settings store so the operator can
+// rotate it without redeploying.
+const PROMPTPAY_TARGET = '0805782958';
 
 const TONE_COLOR: Record<string, string> = {
   fg: '#e5e7eb',
@@ -293,16 +299,20 @@ export default function BillsPage() {
               </div>
               <div>
                 <div className="t-h mb-2">QR Code ส่งให้ลูกค้า</div>
-                <div className="bg-white rounded p-3 grid place-items-center">
-                  <div
-                    className="w-32 h-32"
-                    style={{
-                      backgroundImage:
-                        'repeating-linear-gradient(0deg, #000 0 4px, transparent 4px 8px), repeating-linear-gradient(90deg, #000 0 4px, transparent 4px 8px)',
-                    }}
+                <div className="grid place-items-center">
+                  <PromptPayQR
+                    target={PROMPTPAY_TARGET}
+                    amount={
+                      active.status === 'paid' || active.status === 'refunded' || active.status === 'cancelled'
+                        ? undefined
+                        : active.amount
+                    }
+                    size={160}
                   />
                 </div>
-                <div className="text-2xs text-center text-mute mt-1 mono">PromptPay · {active.id}</div>
+                <div className="text-2xs text-center text-mute mt-1 mono">
+                  PromptPay {PROMPTPAY_TARGET} · {active.id}
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <button
