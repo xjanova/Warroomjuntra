@@ -1,4 +1,5 @@
 import type { CustomerCard, Rarity } from '@/lib/mock/customers';
+import type { Channel } from '@/lib/mock/types';
 import type { AdminUserListItem } from '@/lib/api';
 
 /**
@@ -11,8 +12,8 @@ export function userToCustomerCard(u: AdminUserListItem): CustomerCard {
   const level = u.rank?.level ?? clamp(Math.floor(Math.log2((ltv || 1) + 1)), 1, 30);
   const exp = Math.min(100, Math.max(10, ltv % 100));
 
-  // No FB/LINE channel from /users; infer from verification flags
-  const channel = u.facebook_verified ? 'FB' : 'LINE';
+  const channel = inferChannel(u);
+  const psid = extractPsid(u) ?? u.referral_code ?? `id-${u.id}`;
 
   // No sentiment series — synthesize neutral string (14 chars) so the UI keeps shape.
   const sentiment = 'o'.repeat(14);
@@ -20,7 +21,7 @@ export function userToCustomerCard(u: AdminUserListItem): CustomerCard {
   return {
     id: u.id,
     name: u.name ?? u.email ?? `User #${u.id}`,
-    psid: u.referral_code ?? `id-${u.id}`,
+    psid,
     channel,
     rarity,
     level,
@@ -32,6 +33,36 @@ export function userToCustomerCard(u: AdminUserListItem): CustomerCard {
     readings: 0, // would need a join from /fortune/readings count per user — TODO
     sentiment,
   };
+}
+
+/**
+ * Production data 2026-05-23: Fortune Bot creates users with email
+ * `fb_<psid>@thaiprompt.local` (FB Messenger) or `line_<userid>@thaiprompt.local`
+ * (LINE OA). The boolean *_verified flags fire only when the user OAuth-binds
+ * their social account inside Juntra web — almost no Fortune Bot user does that,
+ * so flags are false-by-default and shouldn't be used as the channel signal.
+ *
+ * Order of trust:
+ *   1. email prefix (authoritative — set by Fortune Bot at user-create time)
+ *   2. *_verified flags (only set for Juntra web OAuth)
+ *   3. default → 'FB' (Fortune Bot is FB-first; ~99% of users)
+ */
+function inferChannel(u: AdminUserListItem): Channel {
+  const e = (u.email ?? '').toLowerCase();
+  if (e.startsWith('fb_')) return 'FB';
+  if (e.startsWith('line_')) return 'LINE';
+  if (u.line_verified && !u.facebook_verified) return 'LINE';
+  return 'FB';
+}
+
+/**
+ * Extract the platform PSID/User ID from the synthesized email so the customer
+ * card shows a real Messenger PSID instead of a useless referral code.
+ */
+function extractPsid(u: AdminUserListItem): string | null {
+  const e = u.email ?? '';
+  const m = /^(fb|line)_([^@]+)@/i.exec(e);
+  return m ? m[2] : null;
 }
 
 function bucketRarity(ltv: number): Rarity {
