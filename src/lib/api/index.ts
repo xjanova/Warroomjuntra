@@ -74,6 +74,7 @@ export {
   fetchPerProviderUsage,
   fetchFortuneWorkersQueue,
   fetchReadingTranscript,
+  fetchBehaviorTriage,
 } from './endpoints';
 export type {
   AdminMe,
@@ -93,6 +94,7 @@ export type {
   CommentDmRow,
   ProviderSplitRow,
   ReadingTranscriptMessage,
+  BehaviorCase,
 } from './endpoints';
 export type {
   DashboardResponse,

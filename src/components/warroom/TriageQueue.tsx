@@ -7,7 +7,7 @@ import { ALL_CASES } from '@/lib/mock/warroom';
 import { severityColor, typeMeta } from '@/lib/helpers';
 import { useWarroom } from '@/lib/stores/warroom';
 import { useSettings } from '@/lib/stores/settings';
-import { useFortuneFeed } from '@/lib/api';
+import { useAdminData, useFortuneFeed, fetchBehaviorTriage, type BehaviorCase } from '@/lib/api';
 import { readingToTriageCase } from '@/lib/adapters/triage';
 import { FollowupStrip } from './FollowupStrip';
 import type { TriageCase } from '@/lib/mock/types';
@@ -34,14 +34,38 @@ export function TriageQueue() {
   const sla = useSettings((s) => s.sla);
 
   const feed = useFortuneFeed();
+
+  // Behavioral signals — keyword detection in customer messages + emotional
+  // events from fortune_sensitive_events. Refreshes every 20s on the home
+  // dashboard so the operator sees "this customer just typed 'โอนแล้ว
+  // ไม่เห็นเปิดไพ่'" within seconds.
+  const behavior = useAdminData({
+    key: 'triage-behavior',
+    fetcher: () => fetchBehaviorTriage({ since_minutes: 360 }),
+    mock: null as unknown as Awaited<ReturnType<typeof fetchBehaviorTriage>>,
+    intervalOverride: 20,
+  });
+
   const allCases = useMemo<TriageCase[]>(() => {
     if (feed.source === 'mock' || (feed.source === 'loading' && feed.data.length === 0)) {
       return ALL_CASES;
     }
-    return feed.data
+    const readingCases = feed.data
       .filter((r) => r.response_type === 'pending' || !r.responded_at)
       .map((r) => readingToTriageCase(r, sla));
-  }, [feed.data, feed.source, sla]);
+
+    // Merge in behavior cases. Avoid duplicating cases that already exist
+    // for the same reading_id.
+    const seenReadings = new Set(readingCases.map((c) => c.id));
+    const behaviorCases: TriageCase[] =
+      behavior.source === 'live' && behavior.data
+        ? (behavior.data.cases ?? [])
+            .filter((b: BehaviorCase) => !b.reading_id || !seenReadings.has(`r-${b.reading_id}`))
+            .map(behaviorCaseToTriage)
+        : [];
+
+    return [...behaviorCases, ...readingCases];
+  }, [feed.data, feed.source, sla, behavior.source, behavior.data]);
   const live = feed; // alias for header badge
 
   const cases = useMemo(() => {
@@ -220,6 +244,57 @@ export function TriageQueue() {
       </div>
     </section>
   );
+}
+
+/**
+ * Convert a behavioral signal (BehaviorCase from /fortune/triage/behavior)
+ * into the TriageCase shape so it can show up next to row-level cases.
+ *
+ * type='sensitive' is used because the existing severity badges color
+ * sensitive cases rose — which fits the "emotional / frustrated customer"
+ * vibe better than payment/reading types.
+ */
+function behaviorCaseToTriage(b: BehaviorCase): TriageCase {
+  const channel = b.platform === 'line' ? 'LINE' : 'FB';
+  // Localized reason chips for the row.
+  const reasonText = (b.reasons || [])
+    .map((r) => {
+      if (r.startsWith('keyword:')) return '🔑 ' + r.replace('keyword:', '');
+      if (r === 'stuck-paid') return '💰 จ่ายแล้วยังไม่ตอบ';
+      if (r === 'mood-5') return '😡 mood 5';
+      if (r === 'mood-4') return '😠 mood 4';
+      if (r === 'multi-question') return '❓ ถามรัว';
+      if (r === 'off-topic') return '⤴ นอกหัวข้อ';
+      if (r.startsWith('classifier:')) return '🤖 ' + r.replace('classifier:', '');
+      return r;
+    })
+    .slice(0, 3)
+    .join(' · ');
+
+  // SLA-ish display: minutes since the last behavior signal.
+  const sec = Math.max(0, Math.floor((Date.now() - new Date(b.last_at).getTime()) / 1000));
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  const slaDisplay = `-${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  const slaPct = Math.min(100, m * 4);
+
+  const tags: string[] = [];
+  if (b.mood_level >= 5) tags.push('mood5');
+  if ((b.reasons || []).includes('stuck-paid')) tags.push('vip'); // money on the table = treat like VIP
+
+  return {
+    id: b.case_id,
+    customer: b.customer || ('FB ' + (b.fb_user_id ?? '').slice(-6)),
+    channel,
+    type: 'sensitive',
+    severity: b.severity === 'crit' ? 'crit' : 'warn',
+    detail: b.preview || reasonText || 'พฤติกรรมเร่งด่วน',
+    slaDisplay,
+    slaPct,
+    amount: undefined,
+    meta: reasonText,
+    tags,
+  };
 }
 
 function parseOverdueSec(display: string): number {

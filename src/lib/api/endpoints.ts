@@ -762,6 +762,36 @@ export async function fetchFortuneWorkersQueue() {
   return apiRequest<FortuneWorkersQueue>({ path: '/fortune/workers/queue' });
 }
 
+// ---- Behavioral triage (Warroom dashboard triage queue) -------------------
+
+export type BehaviorCase = {
+  case_id: string;
+  platform: 'facebook' | 'line' | string;
+  fb_user_id: string;
+  customer: string;
+  user_id: number | null;
+  kind: 'emotional' | 'frustration' | string;
+  severity: 'crit' | 'warn' | string;
+  mood_level: number;
+  reasons: string[];
+  preview: string;
+  context: string | null;
+  last_at: string;
+  count: number;
+  reading_id?: number | null;
+};
+
+export async function fetchBehaviorTriage(params?: { since_minutes?: number }) {
+  const qs = toQuery(params);
+  return apiRequest<{
+    cases: BehaviorCase[];
+    window_minutes: number;
+    crit_count: number;
+    warn_count: number;
+    generated_at: string;
+  }>({ path: `/fortune/triage/behavior${qs}` });
+}
+
 // ---- AI Playground ---------------------------------------------------------
 
 export async function runPlayground(payload: {
