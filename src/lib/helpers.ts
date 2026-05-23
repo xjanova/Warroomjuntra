@@ -52,6 +52,12 @@ export function followupUrgency(f: Followup): number {
   else score = 25;
   if (f.vip) score += 20;
   if (f.amount > 1000) score += 10;
+  // Stuck-paid bumps the score 35 — we owe the customer a deliverable and
+  // every minute past 5 min compounds. (Caps at 100 in followupHeatPct.)
+  if (f.status === 'await_reading') {
+    score += 35;
+    if (m > 5) score += Math.min(20, m - 5);
+  }
   return score;
 }
 

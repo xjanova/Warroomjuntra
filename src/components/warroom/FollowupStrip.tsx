@@ -14,7 +14,7 @@ import {
 } from '@/lib/helpers';
 import { useWarroom } from '@/lib/stores/warroom';
 import { useFortuneFeed } from '@/lib/api';
-import { readingToFollowup } from '@/lib/adapters/followups';
+import { readingToFollowup, needsFollowup } from '@/lib/adapters/followups';
 import type { Followup } from '@/lib/mock/types';
 
 export function FollowupStrip() {
@@ -24,11 +24,12 @@ export function FollowupStrip() {
 
   const followups = useMemo<Followup[]>(() => {
     if (feed.source === 'live') {
-      // Real: unpaid + still actively engaged (last 24h). Cap at 20 cards so
-      // the strip doesn't blow up when there's a backlog.
+      // Real: anything that needs a follow-up — both "unpaid" AND
+      // "paid-but-no-reading-delivered". Cap at 20 cards so the strip doesn't
+      // blow up when there's a backlog. 24h window keeps it actionable.
       const cutoffMs = Date.now() - 24 * 60 * 60 * 1000;
       return feed.data
-        .filter((r) => !r.is_paid && !r.paid_at)
+        .filter(needsFollowup)
         .filter((r) => {
           const ts = r.created_at ? new Date(r.created_at).getTime() : 0;
           return ts >= cutoffMs;
@@ -40,6 +41,11 @@ export function FollowupStrip() {
     return FOLLOWUPS;
   }, [feed.data, feed.source]);
 
+  const stuckPaidCount = useMemo(
+    () => followups.filter((f) => f.status === 'await_reading').length,
+    [followups],
+  );
+
   const items = useMemo(() => sortFollowups(followups, sort), [followups, sort]);
   const total = useMemo(() => followups.reduce((s, f) => s + f.amount, 0), [followups]);
 
@@ -50,8 +56,9 @@ export function FollowupStrip() {
     <div className="border-b border-line bg-gradient-to-r from-warn/10 via-warn/5 to-transparent shrink-0">
       <div className="px-3 pt-2 pb-1.5 flex items-center gap-2">
         <span className="text-base">🎯</span>
-        <span className="t-h text-warn">ติดตามด่วน · ลูกค้าสร้างบิลแล้ว ยังไม่จ่าย</span>
+        <span className="t-h text-warn">ติดตามด่วน · บิลค้าง / จ่ายแล้วยังไม่ได้คำทำนาย</span>
         <Pill tone="warn">{followups.length} คน</Pill>
+        {stuckPaidCount > 0 && <Pill tone="crit">💰 {stuckPaidCount} จ่ายแล้วรอคำทำนาย</Pill>}
         <Pill tone="dim">มูลค่ารวม ฿{total.toLocaleString()}</Pill>
         <DataSourceBadge source={feed.source} isLoading={feed.isLoading} error={feed.error} />
         <span className="text-2xs text-mute">เรียงตามความร้อนของลีด — ทักก่อนเย็น</span>
@@ -70,23 +77,35 @@ export function FollowupStrip() {
       <div className="px-3 pb-2 flex gap-2 overflow-x-auto">
         {items.map((f) => {
           const border = followupBorderColor(f);
+          const isStuckPaid = f.status === 'await_reading';
           return (
             <div
               key={f.id}
               className="shrink-0 w-[220px] cursor-pointer group relative rounded border"
               style={{
                 background: followupBg(f),
-                borderColor: border,
-                boxShadow: followupGlow(f),
+                borderColor: isStuckPaid ? '#ef4444' : border,
+                boxShadow: isStuckPaid
+                  ? '0 0 0 1px rgba(239,68,68,.4), 0 0 14px rgba(239,68,68,.18)'
+                  : followupGlow(f),
               }}
             >
               <div
                 className="absolute top-0 right-0 px-1.5 py-0.5 text-2xs font-bold mono rounded-bl"
-                style={{ background: border, color: '#0a0e17' }}
+                style={{ background: isStuckPaid ? '#ef4444' : border, color: '#0a0e17' }}
               >
                 {followupHeatLabel(f)}
               </div>
               <div className="p-2.5">
+                <div className="mb-1.5">
+                  <span
+                    className={`pill ${isStuckPaid ? 'pill-crit' : 'pill-warn'}`}
+                    style={{ padding: '1px 5px', fontSize: 9 }}
+                    title={isStuckPaid ? 'ลูกค้าจ่ายเงินแล้ว แต่บอทยังไม่ได้ส่งคำทำนาย — ต้องส่งให้ด่วน' : 'ลูกค้าสร้างบิลแล้ว ยังไม่ได้จ่ายเงิน — ต้องตามให้จ่าย'}
+                  >
+                    {isStuckPaid ? '💰 จ่ายแล้ว · รอคำทำนาย' : '⏳ รอจ่าย'}
+                  </span>
+                </div>
                 <div className="flex items-center gap-2 mb-1.5">
                   <div className={`shrink-0 w-6 h-6 rounded grid place-items-center ${f.channel === 'LINE' ? 'bg-ok/15' : 'bg-info/15'}`}>
                     <span className={`text-2xs font-bold mono ${f.channel === 'LINE' ? 'text-ok' : 'text-info'}`}>
@@ -97,7 +116,7 @@ export function FollowupStrip() {
                     <div className="text-xs font-medium text-fg truncate">{f.customer}</div>
                     <div className="text-2xs text-mute truncate">{f.service}</div>
                   </div>
-                  {f.vip && (
+                  {f.vip && !isStuckPaid && (
                     <span className="pill pill-mystic" style={{ padding: '1px 4px', fontSize: 9 }}>
                       VIP
                     </span>
@@ -130,15 +149,33 @@ export function FollowupStrip() {
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      pushToast({ kind: 'warn', title: 'ส่งติดตามแล้ว', body: f.customer });
+                      pushToast({
+                        kind: isStuckPaid ? 'crit' : 'warn',
+                        title: isStuckPaid ? '⚡ เร่งส่งคำทำนาย' : 'ส่งติดตามแล้ว',
+                        body: f.customer,
+                      });
                     }}
-                    className="btn btn-warn flex-1 justify-center text-2xs py-1"
+                    className={`btn ${isStuckPaid ? 'btn-crit' : 'btn-warn'} flex-1 justify-center text-2xs py-1`}
                   >
-                    💬 ทัก
+                    {isStuckPaid ? '⚡ เร่ง' : '💬 ทัก'}
                   </button>
-                  <button className="btn flex-1 justify-center text-2xs py-1" title="ส่ง QR อีกครั้ง" onClick={(e) => e.stopPropagation()}>
-                    ▦ QR
-                  </button>
+                  {isStuckPaid ? (
+                    <button
+                      className="btn flex-1 justify-center text-2xs py-1"
+                      title="เปิดในแอดมินเว็บเพื่อ retry คำทำนาย"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const rid = f.id.replace(/^r-/, '');
+                        window.open('https://main.thaiprompt.online/admin/fortune/readings/' + rid, '_blank', 'noopener');
+                      }}
+                    >
+                      🔮 retry
+                    </button>
+                  ) : (
+                    <button className="btn flex-1 justify-center text-2xs py-1" title="ส่ง QR อีกครั้ง" onClick={(e) => e.stopPropagation()}>
+                      ▦ QR
+                    </button>
+                  )}
                   <button className="btn btn-ghost justify-center text-2xs py-1 px-1.5" title="ยกเลิกบิล" onClick={(e) => e.stopPropagation()}>
                     ✕
                   </button>

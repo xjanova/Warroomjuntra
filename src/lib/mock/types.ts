@@ -32,6 +32,10 @@ export type TriageCase = {
   claimedBy?: ClaimedBy;
 };
 
+export type FollowupStatus =
+  | 'await_payment'   // สร้างบิลแล้วยังไม่จ่าย — ต้องตามให้จ่าย
+  | 'await_reading';  // จ่ายแล้วแต่ยังไม่ได้คำทำนาย — ต้องส่งคำทำนายให้ลูกค้า
+
 export type Followup = {
   id: string;
   customer: string;
@@ -41,6 +45,8 @@ export type Followup = {
   amount: number;
   silentMin: number;
   vip: boolean;
+  /** Defaults to 'await_payment' for backward compat with mock data. */
+  status?: FollowupStatus;
 };
 
 export type Kpi = {

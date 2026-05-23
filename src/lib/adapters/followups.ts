@@ -1,26 +1,35 @@
-import type { Followup, Channel } from '@/lib/mock/types';
+import type { Followup, FollowupStatus, Channel } from '@/lib/mock/types';
 import type { FortuneReading } from '@/lib/api';
 
 /**
- * Map a FortuneReading row (paid_at = null, bill exists) → Followup card.
+ * Map a FortuneReading row → Followup card.
  *
- * Followups are customers who CREATED a reading (FB Messenger flow triggers a
- * row in fortune_readings as soon as the customer asks for a paid service)
- * but never paid. The bot+admin job is to tap them before they go cold.
+ * Two follow-up modes:
+ *   1. await_payment  — created a bill but never paid. Need to nudge.
+ *   2. await_reading  — already paid, but the bot hasn't delivered the
+ *      reading yet (responded_at null or ai_response empty). This is the
+ *      "stuck-paid" case — much more urgent because the customer's money
+ *      is sitting in the system without a deliverable.
  *
- * silentMin: minutes since the row was created. If we have `responded_at`
- * (the bot pushed a QR/info message) we count from that — that's the actual
- * "silent since" the customer-facing timer.
+ * silentMin counts from the moment that matters:
+ *   - await_reading → from paid_at (how long they've been waiting on us)
+ *   - await_payment → from responded_at (last bot push) or created_at
  */
 export function readingToFollowup(r: FortuneReading): Followup {
   const channel: Channel = inferChannel(r);
   const name = r.facebook_user_name ?? r.user?.name ?? `(ลูกค้า ${r.id})`;
   const service = inferServiceLabel(r);
   const amount = Number(r.amount_paid ?? 0) || guessAmountFromService(service);
-  const since = r.responded_at ?? r.created_at ?? null;
+
+  const status: FollowupStatus = classifyStatus(r);
+  const since =
+    status === 'await_reading'
+      ? r.paid_at ?? r.responded_at ?? r.created_at
+      : r.responded_at ?? r.created_at;
   const silentMin = since ? Math.max(0, Math.floor((Date.now() - new Date(since).getTime()) / 60_000)) : 0;
-  // VIP heuristic: ราคา > 999 = น่าตามหนัก
-  const vip = amount >= 999;
+
+  // VIP heuristic: stuck-paid OR high-ticket = น่าตามหนัก
+  const vip = status === 'await_reading' || amount >= 999;
 
   return {
     id: `r-${r.id}`,
@@ -31,7 +40,33 @@ export function readingToFollowup(r: FortuneReading): Followup {
     amount,
     silentMin,
     vip,
+    status,
   };
+}
+
+/**
+ * Classify a reading row. Returns null when the row doesn't need follow-up
+ * at all (paid + responded + has ai_response).
+ */
+export function classifyStatus(r: FortuneReading): FollowupStatus {
+  if (r.is_paid || r.paid_at) {
+    // Paid. Has the bot delivered yet?
+    const hasResponse = !!r.responded_at && !!(r.ai_response ?? '').toString().trim();
+    return hasResponse ? 'await_reading' : 'await_reading'; // either way "we owe them" until delivered
+  }
+  return 'await_payment';
+}
+
+/**
+ * Is this row still pending — i.e. should appear in the followup strip at all?
+ * (Used by FollowupStrip filter.)
+ */
+export function needsFollowup(r: FortuneReading): boolean {
+  // Already fully delivered: skip.
+  const paid = !!(r.is_paid || r.paid_at);
+  const delivered = !!r.responded_at && !!(r.ai_response ?? '').toString().trim();
+  if (paid && delivered) return false;
+  return true;
 }
 
 function inferChannel(r: FortuneReading): Channel {
