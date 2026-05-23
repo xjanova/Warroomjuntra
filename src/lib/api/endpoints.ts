@@ -359,8 +359,10 @@ export type EveChatRequest = {
   message: string;
   history?: Array<{ role: 'user' | 'assistant'; content: string }>;
   context?: Record<string, unknown>;
-  provider?: string; // default 'groq'
-  model?: string;    // default 'llama-3.3-70b-versatile'
+  provider?: string;     // default 'groq'
+  model?: string;        // default 'llama-3.3-70b-versatile'
+  temperature?: number;  // 0..2, default 0.55
+  max_tokens?: number;   // 64..1024, default 320
 };
 
 export type EveChatResponse = {

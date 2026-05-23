@@ -3,6 +3,7 @@
 import { useEffect, useRef } from 'react';
 import { usePathname } from 'next/navigation';
 import { useEve, type EveMood } from '@/lib/stores/eve';
+import { useSettings } from '@/lib/stores/settings';
 import { EveAvatar } from './EveAvatar';
 import { EveChatBody } from './EveChatBody';
 
@@ -44,6 +45,7 @@ const MOODS: EveMood[] = ['idle', 'happy', 'talking', 'thinking', 'concerned', '
 
 export function Eve() {
   const pathname = usePathname();
+  const eveEnabled = useSettings((s) => s.eve.enabled);
   const {
     mode, mood,
     eyeY, eyeLX, eyeRX, mouthX, mouthY,
@@ -96,6 +98,10 @@ export function Eve() {
   // Hide the floating widget on the dedicated /eve page — the page itself
   // renders a full-size Eve, no need for duplication.
   if (pathname === '/eve') return null;
+
+  // Master switch from Settings → Eve AI tab. When off, the floating dock
+  // disappears entirely (operator can re-enable from Settings).
+  if (!eveEnabled) return null;
 
   return (
     <div className="eve-dock">

@@ -75,6 +75,7 @@ export function EveChatBody({
   const [draft, setDraft] = useState('');
   const msgsRef = useRef<HTMLDivElement>(null);
   const paired = useSettings((s) => isPairedFn(s));
+  const eveCfg = useSettings((s) => s.eve);
 
   const respond = useCallback(
     async (text: string) => {
@@ -96,9 +97,15 @@ export function EveChatBody({
           const res = await eveChat({
             message: text,
             history,
-            // Context: pass minimal warroom state so Eve can reference it. The
-            // backend has its own copy via Sanctum user — we just hint here.
-            context: { source: 'warroom-dock', ts: new Date().toISOString() },
+            // Pass live operator-configured provider + model so the SettingsDrawer
+            // Eve tab actually takes effect. If passContext is off, skip the hint.
+            provider: eveCfg.provider,
+            model: eveCfg.model,
+            temperature: eveCfg.temperature,
+            max_tokens: eveCfg.maxTokens,
+            context: eveCfg.passContext
+              ? { source: 'warroom-dock', ts: new Date().toISOString() }
+              : undefined,
           });
           setTyping(false);
           // Convert plain newlines to <br> for display.
@@ -131,7 +138,7 @@ export function EveChatBody({
       setMood(replyMood);
       setTimeout(() => setMood('idle'), 2400);
     },
-    [paired, messages, setMood, setTyping, addMessage],
+    [paired, messages, setMood, setTyping, addMessage, eveCfg.provider, eveCfg.model, eveCfg.temperature, eveCfg.maxTokens, eveCfg.passContext],
   );
 
   const onAction = useCallback((action: string) => {

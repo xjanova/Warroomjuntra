@@ -53,6 +53,15 @@ export type ShiftConfig = {
   handoverNote: string;
 };
 
+export type EveConfig = {
+  provider: string;      // e.g. 'groq' | 'gemini' | 'anthropic' | 'openai' | 'deepseek' | 'qwen'
+  model: string;         // e.g. 'llama-3.3-70b-versatile'
+  temperature: number;   // 0..2
+  maxTokens: number;     // 64..1024
+  enabled: boolean;      // master switch for Eve dock
+  passContext: boolean;  // include warroom state hint in /eve/chat body
+};
+
 type SettingsState = {
   connection: ConnectionConfig;
   sla: SlaThresholds;
@@ -61,6 +70,7 @@ type SettingsState = {
   layout: LayoutMode;
   refreshInterval: RefreshInterval;
   shift: ShiftConfig;
+  eve: EveConfig;
 
   // connection actions
   setBaseUrl: (url: string) => void;
@@ -77,6 +87,7 @@ type SettingsState = {
   setLayout: (v: LayoutMode) => void;
   setRefreshInterval: (v: RefreshInterval) => void;
   setShift: (patch: Partial<ShiftConfig>) => void;
+  setEve: (patch: Partial<EveConfig>) => void;
 
   resetAll: () => void;
 };
@@ -116,6 +127,15 @@ const DEFAULT_SHIFT: ShiftConfig = {
   handoverNote: '',
 };
 
+const DEFAULT_EVE: EveConfig = {
+  provider: 'groq',
+  model: 'llama-3.3-70b-versatile',
+  temperature: 0.55,
+  maxTokens: 320,
+  enabled: true,
+  passContext: true,
+};
+
 export const useSettings = create<SettingsState>()(
   persist(
     (set) => ({
@@ -126,6 +146,7 @@ export const useSettings = create<SettingsState>()(
       layout: '3col',
       refreshInterval: 5,
       shift: DEFAULT_SHIFT,
+      eve: DEFAULT_EVE,
 
       setBaseUrl: (url) =>
         set((s) => ({
@@ -181,6 +202,7 @@ export const useSettings = create<SettingsState>()(
       setLayout: (v) => set({ layout: v }),
       setRefreshInterval: (v) => set({ refreshInterval: v }),
       setShift: (patch) => set((s) => ({ shift: { ...s.shift, ...patch } })),
+      setEve: (patch) => set((s) => ({ eve: { ...s.eve, ...patch } })),
 
       resetAll: () =>
         set({
@@ -191,6 +213,7 @@ export const useSettings = create<SettingsState>()(
           layout: '3col',
           refreshInterval: 5,
           shift: DEFAULT_SHIFT,
+          eve: DEFAULT_EVE,
         }),
     }),
     {
@@ -209,6 +232,7 @@ export const useSettings = create<SettingsState>()(
         layout: state.layout,
         refreshInterval: state.refreshInterval,
         shift: state.shift,
+        eve: state.eve,
       }),
     }
   )

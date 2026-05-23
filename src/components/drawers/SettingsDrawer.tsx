@@ -11,7 +11,7 @@ import {
 import { DrawerShell } from './DrawerShell';
 import { Switch } from '@/components/ui/Switch';
 import { Pill } from '@/components/ui/Pill';
-import { pairConnection, verifyConnection } from '@/lib/api';
+import { pairConnection, verifyConnection, fetchPlaygroundProviders, eveChat, type PlaygroundProvider } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import {
   Plug,
@@ -25,12 +25,14 @@ import {
   Eye,
   EyeOff,
   Trash2,
+  Sparkles,
 } from 'lucide-react';
 
-type TabKey = 'connect' | 'sla' | 'notif' | 'sound' | 'layout' | 'shift' | 'advanced';
+type TabKey = 'connect' | 'eve' | 'sla' | 'notif' | 'sound' | 'layout' | 'shift' | 'advanced';
 
 const TABS: { k: TabKey; label: string; icon: any }[] = [
   { k: 'connect', label: 'เชื่อมต่อ', icon: Plug },
+  { k: 'eve', label: 'Eve AI', icon: Sparkles },
   { k: 'sla', label: 'SLA', icon: Clock },
   { k: 'notif', label: 'แจ้งเตือน', icon: Bell },
   { k: 'sound', label: 'เสียง', icon: Volume2 },
@@ -84,6 +86,7 @@ export function SettingsDrawer() {
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4 text-xs">
         {tab === 'connect' && <ConnectTab />}
+        {tab === 'eve' && <EveTab />}
         {tab === 'sla' && <SlaTab />}
         {tab === 'notif' && <NotifTab />}
         {tab === 'sound' && <SoundTab />}
@@ -347,7 +350,219 @@ function maskToken(t: string): string {
   return `${t.slice(0, 4)}…${t.slice(-4)}`;
 }
 
-// ---------- Tab: SLA ----------
+// ---------- Tab: Eve AI ----------
+
+function EveTab() {
+  const eve = useSettings((s) => s.eve);
+  const setEve = useSettings((s) => s.setEve);
+  const paired = useSettings((s) => s.connection.status === 'paired');
+  const [providers, setProviders] = useState<PlaygroundProvider[]>([]);
+  const [loadingProviders, setLoadingProviders] = useState(false);
+
+  // Test-call state
+  const [testPrompt, setTestPrompt] = useState('สวัสดี Eve ตอนนี้ระบบเป็นยังไงบ้าง');
+  const [testRunning, setTestRunning] = useState(false);
+  const [testReply, setTestReply] = useState<{ ok: boolean; text: string; latency?: number; tokens?: number | null } | null>(null);
+
+  useEffect(() => {
+    if (!paired) return;
+    setLoadingProviders(true);
+    fetchPlaygroundProviders()
+      .then((res) => setProviders(res.providers ?? []))
+      .catch(() => setProviders([]))
+      .finally(() => setLoadingProviders(false));
+  }, [paired]);
+
+  // Match the current provider against the live list. If no match (e.g. operator
+  // typed a custom one), still show as a free-text option.
+  const currentProvider = providers.find((p) => p.name === eve.provider);
+  const modelOptions = currentProvider?.models ?? [];
+
+  const runTest = async () => {
+    setTestRunning(true);
+    setTestReply(null);
+    try {
+      const res = await eveChat({
+        message: testPrompt,
+        provider: eve.provider,
+        model: eve.model,
+      });
+      setTestReply({ ok: true, text: res.reply, latency: res.latency_ms, tokens: res.tokens });
+    } catch (e) {
+      setTestReply({ ok: false, text: String((e as Error).message) });
+    } finally {
+      setTestRunning(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="panel p-3">
+        <div className="flex items-center gap-2 mb-2">
+          <span className="dot dot-mystic" />
+          <span className="font-semibold text-fg">ตัวช่วย Eve</span>
+          <Pill tone={eve.enabled ? 'mystic' : 'dim'}>{eve.enabled ? 'เปิด' : 'ปิด'}</Pill>
+          <div className="flex-1" />
+          <Switch checked={eve.enabled} onChange={(v) => setEve({ enabled: v })} />
+        </div>
+        <div className="text-2xs text-mute">
+          Eve เป็น AI ผู้ช่วยใน War Room — คุยกับ Eve ที่ dock มุมขวาล่าง หรือหน้า <code>/eve</code>
+          {!paired && <> · <span className="text-warn">ยังไม่ paired</span> Eve จะใช้ regex ตอบแบบ demo</>}
+        </div>
+      </div>
+
+      <div className="panel p-3 space-y-3">
+        <div className="t-h">Provider</div>
+        <div>
+          <label className="text-2xs text-mute block mb-1">AI Provider</label>
+          <select
+            value={eve.provider}
+            onChange={(e) => {
+              const next = e.target.value;
+              const prov = providers.find((p) => p.name === next);
+              // Auto-pick the first model of the new provider so we don't leave
+              // an invalid (provider, model) combo behind.
+              setEve({
+                provider: next,
+                model: prov?.models[0]?.name ?? eve.model,
+              });
+            }}
+            className="w-full px-2 py-1.5"
+            disabled={!paired || loadingProviders}
+          >
+            {loadingProviders && <option>กำลังโหลด providers...</option>}
+            {!loadingProviders && providers.length === 0 && (
+              <>
+                <option value="groq">groq (default — ไม่ได้ตรวจสอบ)</option>
+                <option value="gemini">gemini</option>
+                <option value="anthropic">anthropic</option>
+                <option value="openai">openai</option>
+                <option value="deepseek">deepseek</option>
+              </>
+            )}
+            {providers.map((p) => (
+              <option key={p.name} value={p.name}>
+                {p.display_name} ({p.name})
+              </option>
+            ))}
+            {/* Fallback option if current provider isn't in the live list */}
+            {eve.provider && !providers.find((p) => p.name === eve.provider) && (
+              <option value={eve.provider}>{eve.provider} (custom)</option>
+            )}
+          </select>
+        </div>
+
+        <div>
+          <label className="text-2xs text-mute block mb-1">Model</label>
+          {modelOptions.length > 0 ? (
+            <select
+              value={eve.model}
+              onChange={(e) => setEve({ model: e.target.value })}
+              className="w-full px-2 py-1.5"
+            >
+              {modelOptions.map((m) => (
+                <option key={m.id} value={m.name}>
+                  {m.display_name ?? m.name}
+                  {m.context_window ? ' · ' + m.context_window.toLocaleString() + ' ctx' : ''}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              type="text"
+              value={eve.model}
+              onChange={(e) => setEve({ model: e.target.value.trim() })}
+              placeholder="llama-3.3-70b-versatile"
+              className="w-full px-2 py-1.5"
+            />
+          )}
+          <div className="text-2xs text-mute mt-1">
+            แนะนำ: <code>llama-3.3-70b-versatile</code> (groq) · <code>gemini-2.0-flash-exp</code> (gemini) · <code>claude-3-haiku-20240307</code> (anthropic)
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-2xs text-mute block mb-1">
+              Temperature <span className="mono text-fg">{eve.temperature.toFixed(2)}</span>
+            </label>
+            <input
+              type="range"
+              min={0}
+              max={1.5}
+              step={0.05}
+              value={eve.temperature}
+              onChange={(e) => setEve({ temperature: Number(e.target.value) })}
+              className="w-full"
+            />
+            <div className="text-2xs text-mute">0 = ตอบตรงตัว · 1.5 = สร้างสรรค์</div>
+          </div>
+          <div>
+            <label className="text-2xs text-mute block mb-1">
+              Max tokens <span className="mono text-fg">{eve.maxTokens}</span>
+            </label>
+            <input
+              type="number"
+              min={64}
+              max={1024}
+              step={32}
+              value={eve.maxTokens}
+              onChange={(e) => setEve({ maxTokens: Math.max(64, Math.min(1024, Number(e.target.value) || 320)) })}
+              className="w-full px-2 py-1"
+            />
+            <div className="text-2xs text-mute">320 = พอดี · มากกว่านี้ Eve จะตอบยาวขึ้น</div>
+          </div>
+        </div>
+
+        <label className="flex items-center gap-2 pt-1">
+          <Switch checked={eve.passContext} onChange={(v) => setEve({ passContext: v })} />
+          <div>
+            <div className="text-fg">ส่ง context warroom ให้ Eve</div>
+            <div className="text-2xs text-mute">ให้ Eve รู้สถานะคิว/บิล/บอท ปัจจุบัน — Eve จะอ้างถึงตัวเลขจริงได้</div>
+          </div>
+        </label>
+      </div>
+
+      <div className="panel p-3 space-y-2">
+        <div className="t-h">ทดสอบ Eve</div>
+        <textarea
+          value={testPrompt}
+          onChange={(e) => setTestPrompt(e.target.value)}
+          rows={2}
+          className="w-full px-2 py-1.5 resize-none"
+          placeholder="ลองถาม Eve..."
+        />
+        <div className="flex items-center gap-2">
+          <button
+            className="btn btn-primary"
+            onClick={() => void runTest()}
+            disabled={testRunning || !paired || !testPrompt.trim()}
+          >
+            {testRunning ? '⏳ กำลังถาม...' : '▶ ทดสอบ'}
+          </button>
+          {!paired && <span className="text-2xs text-mute">ต้อง paired ก่อนถึงทดสอบจริงได้</span>}
+        </div>
+        {testReply && (
+          <div className={cn(
+            'border rounded p-2 text-xs whitespace-pre-wrap',
+            testReply.ok ? 'border-ok/30 bg-ok/5 text-fg' : 'border-crit/30 bg-crit/5 text-crit',
+          )}>
+            {testReply.text || '(ไม่มี reply)'}
+            {testReply.ok && testReply.latency !== undefined && (
+              <div className="text-2xs text-mute mt-1 mono">
+                {testReply.latency}ms · {testReply.tokens ?? '?'} tokens · {eve.provider}/{eve.model}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="text-2xs text-mute">
+        💡 เปลี่ยน provider แล้วกดทดสอบเพื่อดูว่าตอบไหวก่อนใช้จริง · settings ถูก persist อัตโนมัติทุก keystroke
+      </div>
+    </div>
+  );
+}
 
 function SlaTab() {
   const sla = useSettings((s) => s.sla);
