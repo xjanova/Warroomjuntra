@@ -693,25 +693,35 @@ export async function fetchPerProviderUsage(hours: number = 1) {
 
 // ---- Fortune worker queue (Warroom /workers) ------------------------------
 
-export type FortuneInFlightRow = {
-  reading_id: number;
-  name: string;
-  platform: 'facebook' | 'line' | string;
-  comment_preview: string;
+export type WorkerCallRow = {
+  log_id: number;
+  provider: string;
+  model: string;
+  key_name: string;
+  request_type: string;
+  tokens: number;
+  latency_ms: number;
+  success: boolean;
   created_at: string;
-  age_seconds: number;
-  paid: boolean;
+  age_seconds?: number;
+  error_message?: string | null;
 };
 
-export type FortuneCompletedRow = {
-  reading_id: number;
-  name: string;
-  platform: 'facebook' | 'line' | string;
-  comment_preview: string;
-  reply_preview: string;
-  latency_seconds: number | null;
-  responded_at: string;
-  provider: string | null;
+export type CommentDmRow = {
+  id: number;
+  fb_user_id: string;
+  fb_post_id: string;
+  comment_text: string;
+  comment_reply: string;
+  dm_message: string;
+  engaged_at: string;
+};
+
+export type ProviderSplitRow = {
+  provider: string;
+  calls: number;
+  ok: number;
+  tokens: number;
 };
 
 export type FortuneWorkersQueue = {
@@ -725,9 +735,11 @@ export type FortuneWorkersQueue = {
     failed_last_15m: number;
   };
   throughput: { per_min: number; per_hour: number };
-  latency: { avg_seconds: number; p95_seconds: number };
-  in_flight: FortuneInFlightRow[];
-  recent_completed: FortuneCompletedRow[];
+  latency: { avg_ms: number; p95_ms: number };
+  in_flight: WorkerCallRow[];
+  recent_completed: WorkerCallRow[];
+  comment_dms: CommentDmRow[];
+  provider_split: ProviderSplitRow[];
   generated_at: string;
 };
 

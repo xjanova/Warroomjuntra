@@ -88,8 +88,9 @@ export type {
   EveChatResponse,
   ProviderUsageRow,
   FortuneWorkersQueue,
-  FortuneInFlightRow,
-  FortuneCompletedRow,
+  WorkerCallRow,
+  CommentDmRow,
+  ProviderSplitRow,
 } from './endpoints';
 export type {
   DashboardResponse,
