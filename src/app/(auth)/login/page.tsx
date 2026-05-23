@@ -16,8 +16,11 @@ import { Pill } from '@/components/ui/Pill';
 import { cn } from '@/lib/utils';
 import { Eye, EyeOff, LogIn, ShieldCheck } from 'lucide-react';
 
+// IMPORTANT: use the `main.` subdomain — the apex `thaiprompt.online` 308s
+// to `main.` via Cloudflare, which breaks browser fetch with CORS+POST
+// (preflight doesn't follow 308, and POST bodies are dropped on redirect).
 const ENDPOINT_SUGGESTIONS = [
-  'https://thaiprompt.online/api/admin',
+  'https://main.thaiprompt.online/api/admin',
   'https://staging.thaiprompt.online/api/admin',
   'http://localhost:8000/api/admin',
 ];
@@ -152,7 +155,7 @@ export default function LoginPage() {
               type="url"
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
-              placeholder="https://thaiprompt.online/api/admin"
+              placeholder="https://main.thaiprompt.online/api/admin"
               spellCheck={false}
               className="w-full px-2.5 py-2 text-xs mono"
             />

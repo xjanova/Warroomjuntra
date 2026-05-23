@@ -19,7 +19,7 @@ import type {
 // ─────────────────────────────────────────────────────────────────────────────
 // Thaiprompt Admin API
 // Base URL convention: store the FULL admin prefix in Settings,
-//   e.g. https://thaiprompt.online/api/admin
+//   e.g. https://main.thaiprompt.online/api/admin (apex 308s — use the subdomain)
 // Then every path here is relative to that prefix (e.g. /auth/me).
 // All endpoints sit behind ['auth:sanctum','admin.api'] except /auth/login,
 // /auth/verify-2fa, /auth/pair/claim, /auth/pair/status.

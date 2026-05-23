@@ -60,8 +60,9 @@ const TABS: { k: TabKey; label: string; icon: any }[] = [
   { k: 'advanced', label: 'ขั้นสูง', icon: Wrench },
 ];
 
+// IMPORTANT: use `main.` subdomain (apex 308s to main + breaks CORS+POST flow).
 const ENDPOINT_SUGGESTIONS = [
-  'https://thaiprompt.online/api/admin',
+  'https://main.thaiprompt.online/api/admin',
   'https://staging.thaiprompt.online/api/admin',
   'http://localhost:8000/api/admin',
 ];
@@ -206,7 +207,7 @@ function ConnectTab() {
             type="url"
             value={baseUrl}
             onChange={(e) => setBaseUrlLocal(e.target.value)}
-            placeholder="https://thaiprompt.online/api/admin"
+            placeholder="https://main.thaiprompt.online/api/admin"
             spellCheck={false}
             className="w-full px-2 py-1.5 text-xs mono"
           />
