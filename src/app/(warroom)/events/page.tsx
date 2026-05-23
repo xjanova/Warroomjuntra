@@ -121,7 +121,30 @@ export default function EventsPage() {
         <span className="text-2xs text-mute">
           แสดง {filtered.length} / {items.length} รายการ
         </span>
-        <button className="btn">📥 export</button>
+        <button
+          className="btn"
+          onClick={() => {
+            const rows = filtered.map((ev) => ({
+              ts: ev.ts, kind: ev.kind, channel: ev.channel ?? '', msg: ev.msg,
+            }));
+            const header = ['ts', 'kind', 'channel', 'msg'];
+            const csv = [
+              header.join(','),
+              ...rows.map((r) => header.map((h) => JSON.stringify((r as Record<string, unknown>)[h] ?? '')).join(',')),
+            ].join('\n');
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `warroom-events-${new Date().toISOString().slice(0, 10)}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+          }}
+        >
+          📥 export
+        </button>
       </div>
 
       <main className="flex-1 overflow-hidden">

@@ -173,8 +173,42 @@ export default function BillsPage() {
           <option>เครดิตเติม</option>
         </select>
         <div className="flex-1" />
-        <button className="btn">📥 ส่งออก CSV</button>
-        <button className="btn btn-primary">+ สร้างบิล</button>
+        <button
+          className="btn"
+          onClick={() => {
+            const rows = filtered.map((b) => ({
+              id: b.id, customer: b.customer, channel: b.channel, service: b.service,
+              amount: b.amount, status: b.status, when: b.when,
+            }));
+            const header = ['id', 'customer', 'channel', 'service', 'amount', 'status', 'when'];
+            const csv = [
+              header.join(','),
+              ...rows.map((r) => header.map((h) => JSON.stringify((r as Record<string, unknown>)[h] ?? '')).join(',')),
+            ].join('\n');
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `warroom-bills-${new Date().toISOString().slice(0, 10)}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+          }}
+        >
+          📥 ส่งออก CSV
+        </button>
+        <button
+          className="btn btn-primary"
+          onClick={() => {
+            // Creating a fortune reading bill from scratch needs the customer FB PSID
+            // + service + amount. That's a wizard flow — for now redirect to the
+            // admin web composer that already handles it.
+            window.open('https://main.thaiprompt.online/admin/fortune/readings/create', '_blank', 'noopener');
+          }}
+        >
+          + สร้างบิล
+        </button>
       </div>
 
       <main className="flex-1 grid min-h-0 overflow-hidden" style={{ gridTemplateColumns: '1fr 380px' }}>

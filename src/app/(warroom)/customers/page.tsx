@@ -113,8 +113,42 @@ export default function CustomersPage() {
           <span className="text-fg">ลูกค้าปัญหา</span>
         </label>
         <div className="flex-1" />
-        <button className="btn">📥 ส่งออก</button>
-        <button className="btn btn-primary">📨 broadcast</button>
+        <button
+          className="btn"
+          onClick={() => {
+            // CSV export of currently filtered customers
+            const rows = filtered.map((c) => ({
+              id: c.id, name: c.name, psid: c.psid, channel: c.channel,
+              rarity: c.rarity, level: c.level, ltv: c.ltv, credits: c.credits, readings: c.readings,
+            }));
+            const header = Object.keys(rows[0] ?? { id: '' });
+            const csv = [
+              header.join(','),
+              ...rows.map((r) => header.map((h) => JSON.stringify((r as Record<string, unknown>)[h] ?? '')).join(',')),
+            ].join('\n');
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `warroom-customers-${new Date().toISOString().slice(0, 10)}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+          }}
+        >
+          📥 ส่งออก
+        </button>
+        <button
+          className="btn btn-primary"
+          onClick={() => {
+            // Broadcast is a non-trivial feature (needs backend recipient queue + rate limit).
+            // For now, open the admin web broadcast composer in a new tab.
+            window.open('https://main.thaiprompt.online/admin/messages/broadcast', '_blank', 'noopener');
+          }}
+        >
+          📨 broadcast
+        </button>
       </div>
 
       <main
@@ -192,9 +226,35 @@ export default function CustomersPage() {
               <div className="text-2xs text-mute mono mt-1">sentiment 14 วันล่าสุด</div>
 
               <div className="grid grid-cols-3 gap-1 mt-3">
-                <button className="btn justify-center text-2xs py-1">💬 แชต</button>
-                <button className="btn justify-center text-2xs py-1">🔮 ทำนาย</button>
-                <button className="btn justify-center text-2xs py-1">+ เครดิต</button>
+                <button
+                  className="btn justify-center text-2xs py-1"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    // Open the chat page with this customer pre-selected via query string
+                    window.location.href = '/chat?focus=' + encodeURIComponent(c.psid);
+                  }}
+                >
+                  💬 แชต
+                </button>
+                <button
+                  className="btn justify-center text-2xs py-1"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    window.open('https://main.thaiprompt.online/admin/users/' + c.id, '_blank', 'noopener');
+                  }}
+                >
+                  🔮 ทำนาย
+                </button>
+                <button
+                  className="btn justify-center text-2xs py-1"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    // Credit adjustment lives in the admin web wallet page; open in new tab.
+                    window.open('https://main.thaiprompt.online/admin/wallets?user=' + c.id, '_blank', 'noopener');
+                  }}
+                >
+                  + เครดิต
+                </button>
               </div>
             </div>
           </div>

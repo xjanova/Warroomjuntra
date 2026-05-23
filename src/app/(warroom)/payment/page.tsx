@@ -189,8 +189,22 @@ export default function PaymentPage() {
         ))}
         <div className="flex-1" />
         <input type="text" placeholder="ค้นหา ชื่อ / เลขบิล / จำนวน" className="text-xs px-2 py-1 w-72 mr-2" />
-        <button className="btn">📊 สมุดบัญชี</button>
-        <button className="btn btn-primary">⟳ ดึง SMS ใหม่</button>
+        <button
+          className="btn"
+          onClick={() => setTab('ledger')}
+        >
+          📊 สมุดบัญชี
+        </button>
+        <button
+          className="btn btn-primary"
+          onClick={() => {
+            smsFeed.refetch?.();
+            stats.refetch?.();
+            pushToast({ kind: 'info', title: '⟳ ดึง SMS ใหม่', body: 'รีเฟรชจาก SMS Parser แล้ว' });
+          }}
+        >
+          ⟳ ดึง SMS ใหม่
+        </button>
       </div>
 
       {tab === 'match' && (
