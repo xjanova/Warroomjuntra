@@ -71,6 +71,8 @@ export {
   updateModerationRules,
   fetchPlaygroundProviders,
   runPlayground,
+  fetchPerProviderUsage,
+  fetchFortuneWorkersQueue,
 } from './endpoints';
 export type {
   AdminMe,
@@ -84,6 +86,10 @@ export type {
   PlaygroundResult,
   EveChatRequest,
   EveChatResponse,
+  ProviderUsageRow,
+  FortuneWorkersQueue,
+  FortuneInFlightRow,
+  FortuneCompletedRow,
 } from './endpoints';
 export type {
   DashboardResponse,

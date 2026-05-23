@@ -660,6 +660,83 @@ export async function fetchPlaygroundProviders() {
   return apiRequest<{ providers: PlaygroundProvider[] }>({ path: '/ai/playground/providers' });
 }
 
+// ---- AI per-provider usage (Warroom /usage) -------------------------------
+
+export type ProviderUsageRow = {
+  name: string;            // varchar slug ('openai', 'groq', 'gemini', 'grok', ...)
+  display_name: string;
+  color: string;           // hex / hsl — baked on the server
+  is_active: boolean;
+  total_keys: number;
+  active_keys: number;
+  requests: number;
+  tokens: number;
+  tokens_today: number;
+  tokens_month: number;
+  cost_usd: number;
+  avg_latency_ms: number;
+  p95_latency_ms: number;
+  error_rate_pct: number;
+  series: Array<{ time: string; tokens: number; requests: number }>;
+  series_buckets: number;
+};
+
+export async function fetchPerProviderUsage(hours: number = 1) {
+  const qs = toQuery({ hours });
+  return apiRequest<{
+    providers: ProviderUsageRow[];
+    window_hours: number;
+    bucket_count: number;
+    generated_at: string;
+  }>({ path: `/ai/usage/per-provider${qs}` });
+}
+
+// ---- Fortune worker queue (Warroom /workers) ------------------------------
+
+export type FortuneInFlightRow = {
+  reading_id: number;
+  name: string;
+  platform: 'facebook' | 'line' | string;
+  comment_preview: string;
+  created_at: string;
+  age_seconds: number;
+  paid: boolean;
+};
+
+export type FortuneCompletedRow = {
+  reading_id: number;
+  name: string;
+  platform: 'facebook' | 'line' | string;
+  comment_preview: string;
+  reply_preview: string;
+  latency_seconds: number | null;
+  responded_at: string;
+  provider: string | null;
+};
+
+export type FortuneWorkersQueue = {
+  queue: {
+    pending_paid: number;
+    pending_unpaid: number;
+    in_flight: number;
+    stuck: number;
+    completed_last_15m: number;
+    completed_last_hour: number;
+    failed_last_15m: number;
+  };
+  throughput: { per_min: number; per_hour: number };
+  latency: { avg_seconds: number; p95_seconds: number };
+  in_flight: FortuneInFlightRow[];
+  recent_completed: FortuneCompletedRow[];
+  generated_at: string;
+};
+
+export async function fetchFortuneWorkersQueue() {
+  return apiRequest<FortuneWorkersQueue>({ path: '/fortune/workers/queue' });
+}
+
+// ---- AI Playground ---------------------------------------------------------
+
 export async function runPlayground(payload: {
   system_prompt: string;
   user_message: string;

@@ -3,237 +3,209 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pill } from '@/components/ui/Pill';
 import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
-import { Switch } from '@/components/ui/Switch';
-import { useWarroom } from '@/lib/stores/warroom';
 import {
-  INITIAL_ALERTS,
-  INITIAL_PROVIDERS,
-  METRIC_LABEL,
-  evalRule,
-  metricFormat,
-  metricValue,
-  providerStateLabel,
-  providerStateTone,
-  type AlertMetric,
-  type AlertOperator,
-  type AlertRule,
-  type ProviderUsage,
-} from '@/lib/mock/usage-page';
+  useAdminData,
+  fetchPerProviderUsage,
+  describeError,
+  type ProviderUsageRow,
+} from '@/lib/api';
+import { useWarroom } from '@/lib/stores/warroom';
 
-const TICK_MS = 2_000;
+// Alert rules stay client-side — there's no backend endpoint yet, so the
+// operator's edits persist in localStorage. The eval pass runs every refresh
+// against the live data.
+const ALERTS_KEY = 'warroom.usage.alerts.v1';
+
+type AlertMetric = 'tokens_per_hour' | 'error_rate_pct' | 'latency_p95_ms';
+type AlertOp = '>' | '>=' | '<' | '<=';
+type AlertRule = {
+  id: string;
+  name: string;
+  providerName: string | 'any';
+  metric: AlertMetric;
+  op: AlertOp;
+  threshold: number;
+  enabled: boolean;
+  state: 'idle' | 'triggered';
+  lastTriggeredAt?: string;
+};
+
+const METRIC_LABEL: Record<AlertMetric, string> = {
+  tokens_per_hour: 'Tokens / ชั่วโมง (window)',
+  error_rate_pct: 'อัตราล้มเหลว (%)',
+  latency_p95_ms: 'Latency p95 (ms)',
+};
+
+const DEFAULT_ALERTS: AlertRule[] = [
+  { id: 'al-err-5', name: 'Error rate > 5% (any)', providerName: 'any', metric: 'error_rate_pct', op: '>', threshold: 5, enabled: true, state: 'idle' },
+  { id: 'al-p95-3s', name: 'Latency p95 > 3s (any)', providerName: 'any', metric: 'latency_p95_ms', op: '>', threshold: 3000, enabled: true, state: 'idle' },
+];
+
+function metricValue(p: ProviderUsageRow, m: AlertMetric): number {
+  switch (m) {
+    case 'tokens_per_hour': return p.tokens;
+    case 'error_rate_pct':  return p.error_rate_pct;
+    case 'latency_p95_ms':  return p.p95_latency_ms;
+  }
+}
+
+function metricFormat(m: AlertMetric, v: number): string {
+  switch (m) {
+    case 'tokens_per_hour': return v.toLocaleString();
+    case 'error_rate_pct':  return v.toFixed(1) + '%';
+    case 'latency_p95_ms':  return v.toFixed(0) + 'ms';
+  }
+}
+
+function evalRule(rule: AlertRule, v: number): boolean {
+  switch (rule.op) {
+    case '>':  return v >  rule.threshold;
+    case '>=': return v >= rule.threshold;
+    case '<':  return v <  rule.threshold;
+    case '<=': return v <= rule.threshold;
+  }
+}
 
 export default function UsagePage() {
   const pushToast = useWarroom((s) => s.pushToast);
-
-  const [providers, setProviders] = useState<ProviderUsage[]>(INITIAL_PROVIDERS);
-  const [alerts, setAlerts] = useState<AlertRule[]>(INITIAL_ALERTS);
+  const [hours, setHours] = useState<1 | 6 | 24 | 168>(1);
   const [tab, setTab] = useState<'overview' | 'alerts' | 'keys'>('overview');
   const [selectedProvider, setSelectedProvider] = useState<string | 'all'>('all');
-  const [paused, setPaused] = useState(false);
 
-  // Track which rules just fired so we can toast once instead of every tick.
-  const lastTriggeredRef = useRef<Record<string, number>>({});
+  // Refresh interval — 5s for 1h window (most "real-time"), slower for wider.
+  const intervalSec = hours === 1 ? 5 : hours === 6 ? 15 : 30;
 
-  // ── Realtime tick: jitter metrics, push to chart, re-eval alerts ────────────
+  const live = useAdminData({
+    key: `usage-per-provider-${hours}`,
+    fetcher: () => fetchPerProviderUsage(hours),
+    mock: null as unknown as Awaited<ReturnType<typeof fetchPerProviderUsage>>,
+    intervalOverride: intervalSec,
+  });
+
+  const providers: ProviderUsageRow[] = useMemo(() => {
+    if (live.source === 'live' && live.data) {
+      return (live.data.providers ?? []) as ProviderUsageRow[];
+    }
+    return [];
+  }, [live.source, live.data]);
+
+  // ── Alert rules — persisted locally ────────────────────────────────────────
+  const [alerts, setAlerts] = useState<AlertRule[]>(() => {
+    if (typeof window === 'undefined') return DEFAULT_ALERTS;
+    try {
+      const raw = localStorage.getItem(ALERTS_KEY);
+      if (raw) {
+        const arr = JSON.parse(raw) as AlertRule[];
+        if (Array.isArray(arr)) return arr;
+      }
+    } catch {}
+    return DEFAULT_ALERTS;
+  });
   useEffect(() => {
-    if (paused) return;
-    const t = setInterval(() => {
-      setProviders((prev) => {
-        const next = prev.map((p) => {
-          if (!p.enabled || p.state === 'disabled') return p;
-          // Jitter each metric ±10% so the chart actually moves.
-          const j = (base: number, amp = 0.1) => Math.max(0, base * (1 + (Math.random() - 0.5) * 2 * amp));
-          const tokens = Math.round(j(p.tokensPerMin, p.state === 'degraded' ? 0.3 : 0.12));
-          const reqs = Math.round(j(p.reqPerMin, 0.15));
-          const cost = +(j(p.costUsdPerHr, 0.08)).toFixed(2);
-          // Error rate drifts with a damped random walk so it doesn't spike too hard.
-          const err = Math.max(0, Math.min(100, p.errorRatePct + (Math.random() - 0.5) * (p.state === 'degraded' ? 2 : 0.6)));
-          const lat = Math.round(j(p.avgLatencyMs, 0.1));
-          const p95 = Math.round(j(p.p95LatencyMs, 0.12));
-          return {
-            ...p,
-            tokensPerMin: tokens,
-            reqPerMin: reqs,
-            costUsdPerHr: cost,
-            errorRatePct: +err.toFixed(1),
-            avgLatencyMs: lat,
-            p95LatencyMs: p95,
-            series60min: [...p.series60min.slice(1), tokens],
-          };
-        });
+    try { localStorage.setItem(ALERTS_KEY, JSON.stringify(alerts)); } catch {}
+  }, [alerts]);
 
-        // Alert evaluation pass.
-        setAlerts((rules) =>
-          rules.map((r) => {
-            if (!r.enabled) return r.state === 'triggered' ? { ...r, state: 'idle' } : r;
-            const targets =
-              r.providerId === 'any'
-                ? next.filter((p) => p.enabled)
-                : next.filter((p) => p.id === r.providerId && p.enabled);
-            const fired = targets.find((p) => evalRule(r, metricValue(p, r.metric)));
-            const triggered = !!fired;
-            if (triggered && r.state !== 'triggered') {
-              // Edge: idle → triggered. Push a toast.
-              const now = Date.now();
-              if (now - (lastTriggeredRef.current[r.id] ?? 0) > 30_000) {
-                lastTriggeredRef.current[r.id] = now;
-                pushToast({
-                  kind: 'crit',
-                  title: '🚨 ' + r.name,
-                  body: fired ? fired.name + ' = ' + metricFormat(r.metric, metricValue(fired, r.metric)) : '',
-                });
-              }
-              return { ...r, state: 'triggered', lastTriggeredAt: new Date().toTimeString().slice(0, 8) };
-            }
-            if (!triggered && r.state === 'triggered') {
-              return { ...r, state: 'idle' };
-            }
-            return r;
-          }),
-        );
+  // Toast debounce per rule.
+  const lastToastedRef = useRef<Record<string, number>>({});
 
-        return next;
-      });
-    }, TICK_MS);
-    return () => clearInterval(t);
-  }, [paused, pushToast]);
+  // Re-eval whenever providers refresh.
+  useEffect(() => {
+    if (providers.length === 0) return;
+    setAlerts((prev) =>
+      prev.map((r) => {
+        if (!r.enabled) {
+          return r.state === 'triggered' ? { ...r, state: 'idle' as const } : r;
+        }
+        const targets =
+          r.providerName === 'any'
+            ? providers.filter((p) => p.is_active)
+            : providers.filter((p) => p.name === r.providerName);
+        const fired = targets.find((p) => evalRule(r, metricValue(p, r.metric)));
+        if (fired && r.state !== 'triggered') {
+          const now = Date.now();
+          if (now - (lastToastedRef.current[r.id] ?? 0) > 30_000) {
+            lastToastedRef.current[r.id] = now;
+            pushToast({
+              kind: 'crit',
+              title: '🚨 ' + r.name,
+              body: fired.display_name + ' = ' + metricFormat(r.metric, metricValue(fired, r.metric)),
+            });
+          }
+          return { ...r, state: 'triggered' as const, lastTriggeredAt: new Date().toTimeString().slice(0, 8) };
+        }
+        if (!fired && r.state === 'triggered') {
+          return { ...r, state: 'idle' as const };
+        }
+        return r;
+      }),
+    );
+  }, [providers, pushToast]);
 
-  // ── Aggregates ──────────────────────────────────────────────────────────────
+  // ── Aggregates ─────────────────────────────────────────────────────────────
   const totals = useMemo(() => {
-    const tokens = providers.reduce((s, p) => s + p.tokensPerMin, 0);
-    const reqs = providers.reduce((s, p) => s + p.reqPerMin, 0);
-    const cost = providers.reduce((s, p) => s + p.costUsdPerHr, 0);
-    const liveCnt = providers.filter((p) => p.state === 'live').length;
-    const degraded = providers.filter((p) => p.state === 'degraded').length;
-    const errCnt = providers.filter((p) => p.state === 'error').length;
-    const monthSpent = providers.reduce((s, p) => s + p.keys.reduce((a, k) => a + k.spentUSD, 0), 0);
-    return { tokens, reqs, cost, liveCnt, degraded, errCnt, monthSpent };
+    const tokens = providers.reduce((s, p) => s + p.tokens, 0);
+    const reqs = providers.reduce((s, p) => s + p.requests, 0);
+    const tokensToday = providers.reduce((s, p) => s + p.tokens_today, 0);
+    const tokensMonth = providers.reduce((s, p) => s + p.tokens_month, 0);
+    const activeKeys = providers.reduce((s, p) => s + p.active_keys, 0);
+    const totalKeys = providers.reduce((s, p) => s + p.total_keys, 0);
+    const liveProviders = providers.filter((p) => p.is_active && p.requests > 0).length;
+    return { tokens, reqs, tokensToday, tokensMonth, activeKeys, totalKeys, liveProviders };
   }, [providers]);
 
   const triggeredCount = alerts.filter((a) => a.state === 'triggered').length;
 
-  // ── Actions ────────────────────────────────────────────────────────────────
-  const toggleProvider = useCallback(
-    (id: string, off: boolean) => {
-      if (off && !window.confirm('ปิด provider นี้ทันที? คำขอที่ค้างจะ fallback ไป provider ถัดไป')) return;
-      setProviders((prev) =>
-        prev.map((p) =>
-          p.id === id
-            ? {
-                ...p,
-                enabled: !off,
-                state: off ? 'disabled' : 'live',
-                tokensPerMin: off ? 0 : p.tokensPerMin,
-                reqPerMin: off ? 0 : p.reqPerMin,
-                costUsdPerHr: off ? 0 : p.costUsdPerHr,
-              }
-            : p,
-        ),
-      );
-      pushToast({
-        kind: off ? 'crit' : 'ok',
-        title: (off ? '🔌 ปิด ' : '✓ เปิด ') + id,
-        body: off ? 'fallback ไป provider อื่น' : 'พร้อมรับ request',
-      });
-    },
-    [pushToast],
+  // ── Render ─────────────────────────────────────────────────────────────────
+  const kpis = useMemo(
+    () => [
+      { label: `Providers ใช้งานในช่วง ${hours}h`, value: `${totals.liveProviders}/${providers.length}`, sub: `${totals.activeKeys}/${totals.totalKeys} keys เปิด`, color: '#10b981' },
+      { label: `Requests · ${hours}h`, value: totals.reqs.toLocaleString(), sub: 'รวมทุก provider', color: '#22d3ee' },
+      { label: `Tokens · ${hours}h`, value: totals.tokens.toLocaleString(), sub: 'รวม input+output', color: '#8b5cf6' },
+      { label: 'Tokens / วันนี้', value: totals.tokensToday.toLocaleString(), sub: '(สะสมจาก ai_api_keys)', color: '#f59e0b' },
+      { label: 'Tokens / เดือนนี้', value: totals.tokensMonth.toLocaleString(), sub: '(สะสมจาก ai_api_keys)', color: '#d4a747' },
+      { label: 'Alert ติด', value: String(triggeredCount), sub: triggeredCount ? 'รีบเช็ค' : 'ปกติ', color: triggeredCount ? '#ef4444' : '#6b7280', glow: triggeredCount > 0 },
+    ],
+    [hours, totals, providers.length, triggeredCount],
   );
 
-  const toggleKey = useCallback(
-    (providerId: string, keyId: string, off: boolean) => {
-      if (off && !window.confirm('ปิด key นี้ทันที?')) return;
-      setProviders((prev) =>
-        prev.map((p) =>
-          p.id === providerId
-            ? { ...p, keys: p.keys.map((k) => (k.id === keyId ? { ...k, enabled: !off } : k)) }
-            : p,
-        ),
-      );
-      pushToast({
-        kind: off ? 'crit' : 'ok',
-        title: (off ? '🔒 ปิด key ' : '✓ เปิด key ') + keyId,
-        body: providerId,
-      });
-    },
-    [pushToast],
-  );
-
-  const killAll = useCallback(() => {
-    if (!window.confirm('ปิดทุก provider พร้อมกัน? ระบบทำนายจะหยุดส่งคำขอจริง ๆ')) return;
-    setProviders((prev) =>
-      prev.map((p) => ({ ...p, enabled: false, state: 'disabled' as const, tokensPerMin: 0, reqPerMin: 0, costUsdPerHr: 0 })),
-    );
-    pushToast({ kind: 'crit', title: '🛑 หยุดทุก provider', body: 'AI ทั้งระบบหยุดรับคำขอ' });
-  }, [pushToast]);
-
-  const toggleAlert = useCallback((id: string) => {
-    setAlerts((prev) => prev.map((a) => (a.id === id ? { ...a, enabled: !a.enabled } : a)));
-  }, []);
-
-  const addAlert = useCallback(() => {
-    const id = 'al-' + (alerts.length + 1) + '-' + Math.random().toString(36).slice(2, 6);
-    setAlerts((prev) => [
-      ...prev,
-      {
-        id,
-        name: 'กฎใหม่',
-        providerId: 'any',
-        metric: 'cost_per_hour_usd',
-        op: '>',
-        threshold: 10,
-        enabled: true,
-        notifyChannels: ['toast'],
-        state: 'idle',
-      },
-    ]);
-  }, [alerts.length]);
-
-  const updateAlert = useCallback((id: string, patch: Partial<AlertRule>) => {
-    setAlerts((prev) => prev.map((a) => (a.id === id ? { ...a, ...patch } : a)));
-  }, []);
-
-  const deleteAlert = useCallback((id: string) => {
-    if (!window.confirm('ลบกฎนี้?')) return;
-    setAlerts((prev) => prev.filter((a) => a.id !== id));
-  }, []);
-
-  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col h-full min-h-0">
-      {/* Header */}
       <header className="h-12 flex items-center border-b border-line bg-panel2/40 px-3 gap-3 shrink-0">
         <span className={`dot ${triggeredCount ? 'dot-crit' : 'dot-info'}`} />
         <span className="t-h">API USAGE · การใช้งาน AI provider</span>
-        <DataSourceBadge source="mock" title="mock-first — ยังไม่มี endpoint per-provider timeseries" />
+        <DataSourceBadge source={live.source} isLoading={live.isLoading} error={live.error} />
         {triggeredCount > 0 && <Pill tone="crit">🚨 {triggeredCount} alert ติด</Pill>}
         <div className="flex-1" />
-        <Pill tone="info">{totals.liveCnt} live</Pill>
-        {totals.degraded > 0 && <Pill tone="warn">{totals.degraded} ช้า</Pill>}
-        {totals.errCnt > 0 && <Pill tone="crit">{totals.errCnt} offline</Pill>}
-        <button className={`btn ${paused ? 'btn-ok' : 'btn-warn'}`} onClick={() => setPaused((p) => !p)}>
-          {paused ? '▶ เดินต่อ' : '⏸ หยุด tick'}
+        <div className="flex gap-1 text-2xs">
+          {([1, 6, 24, 168] as const).map((h) => (
+            <button
+              key={h}
+              onClick={() => setHours(h)}
+              className={`pill ${hours === h ? 'pill-info' : 'pill-dim'}`}
+              title={h === 168 ? 'ย้อน 7 วัน' : h === 1 ? 'realtime 5s' : `ย้อน ${h} ชั่วโมง`}
+            >
+              {h === 168 ? '7d' : h + 'h'}
+            </button>
+          ))}
+        </div>
+        <button className="btn" onClick={() => void live.refetch()}>
+          ↻ refresh
         </button>
-        <button className="btn btn-crit" onClick={killAll}>🛑 ปิดทุก provider</button>
       </header>
 
-      {/* KPI strip */}
       <section className="px-3 py-2 border-b border-line shrink-0">
         <div className="grid grid-cols-6 gap-2">
-          <Kpi label="Providers พร้อมใช้" value={`${totals.liveCnt}/${providers.length}`} sub={`${totals.degraded} degraded · ${totals.errCnt} offline`} color="#10b981" />
-          <Kpi label="Tokens / นาที" value={totals.tokens.toLocaleString()} sub="รวมทุก provider" color="#22d3ee" />
-          <Kpi label="Requests / นาที" value={totals.reqs.toLocaleString()} sub="rate ปัจจุบัน" color="#8b5cf6" />
-          <Kpi label="ค่าใช้จ่าย / ชม" value={'$' + totals.cost.toFixed(2)} sub={'≈ $' + (totals.cost * 24).toFixed(0) + ' / วัน'} color="#f59e0b" />
-          <Kpi label="ใช้จริงเดือนนี้" value={'$' + totals.monthSpent.toFixed(0)} sub="รวมทุก key" color="#d4a747" />
-          <Kpi label="Alert ติด" value={String(triggeredCount)} sub={triggeredCount ? 'รีบเช็ค' : 'ปกติ'} color={triggeredCount ? '#ef4444' : '#6b7280'} glow={triggeredCount > 0} />
+          {kpis.map((k) => (
+            <Kpi key={k.label} {...k} />
+          ))}
         </div>
       </section>
 
-      {/* Tabs */}
       <div className="px-3 border-b border-line flex items-center gap-1 shrink-0">
         {[
           { k: 'overview', label: 'ภาพรวม + กราฟ', count: providers.length, tone: 'info' as const },
           { k: 'alerts',   label: 'กฎเตือน',       count: alerts.length,    tone: triggeredCount > 0 ? 'crit' as const : 'warn' as const },
-          { k: 'keys',     label: 'API keys',      count: providers.reduce((s, p) => s + p.keys.length, 0), tone: 'mystic' as const },
+          { k: 'keys',     label: 'API keys',      count: totals.totalKeys, tone: 'mystic' as const },
         ].map((t) => (
           <button
             key={t.k}
@@ -246,34 +218,45 @@ export default function UsagePage() {
             <Pill tone={t.tone}>{t.count}</Pill>
           </button>
         ))}
+        <div className="flex-1" />
+        {live.error && (
+          <span className="text-2xs text-crit mono mr-2" title={live.error}>
+            ‼ {describeError(live.error).slice(0, 60)}
+          </span>
+        )}
       </div>
 
       {tab === 'overview' && (
-        <main className="flex-1 grid min-h-0 overflow-hidden" style={{ gridTemplateColumns: '1fr 420px' }}>
-          {/* Big chart + provider cards */}
+        <main className="flex-1 grid min-h-0 overflow-hidden" style={{ gridTemplateColumns: '1fr 380px' }}>
           <section className="overflow-y-auto p-3 space-y-3">
-            <UsageChart
-              providers={providers.filter((p) => selectedProvider === 'all' || p.id === selectedProvider)}
-              onSelectProvider={setSelectedProvider}
-              selectedProvider={selectedProvider}
-              allProviders={providers}
-            />
+            {providers.length > 0 && (
+              <UsageChart
+                providers={
+                  selectedProvider === 'all'
+                    ? providers
+                    : providers.filter((p) => p.name === selectedProvider)
+                }
+                allProviders={providers}
+                selectedProvider={selectedProvider}
+                onSelectProvider={setSelectedProvider}
+                hours={hours}
+              />
+            )}
             <div
               className="grid gap-3"
               style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))' }}
             >
+              {providers.length === 0 && (
+                <div className="col-span-full text-center text-2xs text-mute p-12">
+                  {live.isLoading ? 'กำลังโหลด...' : 'ไม่มีข้อมูล provider'}
+                </div>
+              )}
               {providers.map((p) => (
-                <ProviderCard
-                  key={p.id}
-                  p={p}
-                  onToggle={(off) => toggleProvider(p.id, off)}
-                  onSelect={() => setSelectedProvider(p.id)}
-                />
+                <ProviderCard key={p.name} p={p} onSelect={() => setSelectedProvider(p.name)} />
               ))}
             </div>
           </section>
 
-          {/* Right rail: triggered alerts + spend pace */}
           <aside className="border-l border-line bg-panel2/30 flex flex-col min-h-0 overflow-y-auto">
             <div className="px-3 py-2 border-b border-line">
               <span className="t-h">ALERT ที่ติดอยู่</span>
@@ -288,41 +271,14 @@ export default function UsagePage() {
                     <div className="flex-1">
                       <div className="text-xs text-fg font-semibold">{a.name}</div>
                       <div className="text-2xs text-mute mono mt-0.5">
-                        เกณฑ์ {METRIC_LABEL[a.metric]} {a.op} {metricFormat(a.metric, a.threshold)}
+                        {METRIC_LABEL[a.metric]} {a.op} {metricFormat(a.metric, a.threshold)}
                       </div>
-                      <div className="text-2xs text-mute mono mt-0.5">เด้งครั้งล่าสุด: {a.lastTriggeredAt}</div>
+                      <div className="text-2xs text-mute mono mt-0.5">ล่าสุด: {a.lastTriggeredAt}</div>
                     </div>
                   </div>
                 </div>
               ))
             )}
-            <div className="px-3 py-2 border-b border-line mt-2">
-              <span className="t-h">SPEND THIS MONTH</span>
-            </div>
-            {providers.map((p) => {
-              const spent = p.keys.reduce((s, k) => s + k.spentUSD, 0);
-              const quota = p.keys.reduce((s, k) => s + (k.monthlyQuotaUSD ?? 0), 0);
-              const pct = quota ? Math.min(100, (spent / quota) * 100) : 0;
-              return (
-                <div key={p.id} className="px-3 py-2 border-b border-line/60">
-                  <div className="flex items-center justify-between text-xs mb-1">
-                    <span className="text-fg font-medium">{p.name}</span>
-                    <span className="mono text-2xs text-mute">
-                      ${spent.toFixed(0)}{quota ? ` / $${quota}` : ''}
-                    </span>
-                  </div>
-                  <div className="quota-bar">
-                    <div
-                      className="quota-fill"
-                      style={{
-                        width: `${pct}%`,
-                        background: pct > 90 ? '#ef4444' : pct > 70 ? '#f59e0b' : p.color,
-                      }}
-                    />
-                  </div>
-                </div>
-              );
-            })}
           </aside>
         </main>
       )}
@@ -331,20 +287,37 @@ export default function UsagePage() {
         <main className="flex-1 overflow-y-auto p-3">
           <div className="max-w-5xl mx-auto space-y-2">
             <div className="flex items-center justify-between mb-2">
-              <span className="t-h">กฎเตือน · มาเด้ง toast / desktop / เสียงเมื่อเข้าเกณฑ์</span>
-              <button className="btn btn-primary" onClick={addAlert}>+ เพิ่มกฎ</button>
+              <span className="t-h">กฎเตือน · เก็บใน localStorage (rules ทำงานเฉพาะ tab เปิด)</span>
+              <button
+                className="btn btn-primary"
+                onClick={() =>
+                  setAlerts((prev) => [
+                    ...prev,
+                    {
+                      id: 'al-' + Math.random().toString(36).slice(2, 7),
+                      name: 'กฎใหม่',
+                      providerName: 'any',
+                      metric: 'tokens_per_hour',
+                      op: '>',
+                      threshold: 10_000,
+                      enabled: true,
+                      state: 'idle',
+                    },
+                  ])
+                }
+              >
+                + เพิ่มกฎ
+              </button>
             </div>
-            {alerts.length === 0 && (
-              <div className="text-center text-2xs text-mute p-8">ยังไม่มีกฎ — กด + เพิ่มกฎ</div>
-            )}
             {alerts.map((a) => (
               <AlertRuleCard
                 key={a.id}
                 rule={a}
                 providers={providers}
-                onToggle={() => toggleAlert(a.id)}
-                onUpdate={(patch) => updateAlert(a.id, patch)}
-                onDelete={() => deleteAlert(a.id)}
+                onUpdate={(patch) => setAlerts((prev) => prev.map((x) => (x.id === a.id ? { ...x, ...patch } : x)))}
+                onDelete={() => {
+                  if (window.confirm('ลบกฎนี้?')) setAlerts((prev) => prev.filter((x) => x.id !== a.id));
+                }}
               />
             ))}
           </div>
@@ -353,90 +326,63 @@ export default function UsagePage() {
 
       {tab === 'keys' && (
         <main className="flex-1 overflow-y-auto p-3">
-          <div className="space-y-3">
-            {providers.map((p) => (
-              <div key={p.id} className="panel">
-                <div className="px-3 py-2 border-b border-line flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full" style={{ background: p.color }} />
-                  <span className="font-semibold text-fg text-sm">{p.name}</span>
-                  <Pill tone={providerStateTone(p.state)}>{providerStateLabel(p.state)}</Pill>
-                  <div className="flex-1" />
-                  <span className="text-2xs text-mute mono">{p.keys.length} keys</span>
-                </div>
-                <table className="dense w-full">
-                  <thead>
-                    <tr>
-                      <th>Label</th>
-                      <th>Key</th>
-                      <th>ใช้แล้ว / โควต้า</th>
-                      <th>ใช้ล่าสุด</th>
-                      <th className="text-right">การกระทำ</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {p.keys.map((k) => {
-                      const pct = k.monthlyQuotaUSD ? (k.spentUSD / k.monthlyQuotaUSD) * 100 : 0;
-                      return (
-                        <tr key={k.id} className={k.enabled ? '' : 'opacity-50'}>
-                          <td className="text-fg">{k.label}</td>
-                          <td className="mono text-2xs text-mute">{k.masked}</td>
-                          <td>
-                            <div className="flex items-center gap-2">
-                              <div className="w-32 h-1.5 rounded bg-line overflow-hidden">
-                                <div
-                                  className="h-full"
-                                  style={{
-                                    width: `${Math.min(100, pct)}%`,
-                                    background: pct > 90 ? '#ef4444' : pct > 70 ? '#f59e0b' : p.color,
-                                  }}
-                                />
-                              </div>
-                              <span className="mono text-2xs text-fg">
-                                ${k.spentUSD.toFixed(0)}{k.monthlyQuotaUSD ? ` / $${k.monthlyQuotaUSD}` : ''}
-                              </span>
-                            </div>
-                          </td>
-                          <td className="mono text-2xs text-mute">{k.lastUsedAt}</td>
-                          <td className="text-right space-x-1">
-                            <button
-                              className={`btn ${k.enabled ? 'btn-crit' : 'btn-ok'}`}
-                              onClick={() => toggleKey(p.id, k.id, k.enabled)}
-                            >
-                              {k.enabled ? '🔒 ปิดทันที' : '✓ เปิด'}
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            ))}
+          <div className="max-w-5xl mx-auto space-y-3">
+            <div className="panel p-3 text-2xs text-mute">
+              <div className="t-h mb-1 text-info">หมายเหตุ</div>
+              จัดการ key (เปิด/ปิด, เพิ่ม key ใหม่) ยังต้องทำผ่าน{' '}
+              <a
+                href="https://main.thaiprompt.online/admin/ai/api-keys"
+                target="_blank"
+                rel="noopener"
+                className="text-info underline"
+              >
+                admin web /admin/ai/api-keys
+              </a>{' '}
+              เพราะ warroom ยังไม่มี endpoint จัดการ key. หน้านี้แสดงสถิติ key รวมต่อ provider ที่อ่านจาก
+              <code className="mono text-mute"> ai_api_keys</code>.
+            </div>
+            <table className="dense w-full">
+              <thead>
+                <tr>
+                  <th>Provider</th>
+                  <th className="text-right">Keys (active / total)</th>
+                  <th className="text-right">Tokens วันนี้</th>
+                  <th className="text-right">Tokens เดือนนี้</th>
+                  <th className="text-right">Requests (window)</th>
+                  <th className="text-right">Error rate</th>
+                </tr>
+              </thead>
+              <tbody>
+                {providers.map((p) => (
+                  <tr key={p.name}>
+                    <td>
+                      <div className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full" style={{ background: p.color }} />
+                        <span className="text-fg">{p.display_name}</span>
+                        <span className="text-2xs text-mute mono">({p.name})</span>
+                      </div>
+                    </td>
+                    <td className="text-right mono">
+                      <span className={p.active_keys > 0 ? 'text-ok' : 'text-mute'}>{p.active_keys}</span>
+                      <span className="text-mute"> / {p.total_keys}</span>
+                    </td>
+                    <td className="text-right mono text-fg">{p.tokens_today.toLocaleString()}</td>
+                    <td className="text-right mono text-fg">{p.tokens_month.toLocaleString()}</td>
+                    <td className="text-right mono">{p.requests.toLocaleString()}</td>
+                    <td className={`text-right mono ${p.error_rate_pct > 10 ? 'text-crit' : p.error_rate_pct > 3 ? 'text-warn' : 'text-ok'}`}>
+                      {p.error_rate_pct.toFixed(1)}%
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </main>
       )}
-
-      <style jsx>{`
-        .quota-bar {
-          height: 5px;
-          background: #0d1320;
-          border: 1px solid var(--border, #1f2937);
-          border-radius: 3px;
-          overflow: hidden;
-        }
-        .quota-fill {
-          height: 100%;
-          transition: width 0.5s cubic-bezier(0.22, 0.61, 0.36, 1);
-          border-radius: 2px;
-        }
-      `}</style>
     </div>
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// KPI card
-// ─────────────────────────────────────────────────────────────────────────────
 function Kpi({
   label,
   value,
@@ -462,89 +408,78 @@ function Kpi({
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Provider summary card — current numbers + kill switch + sparkline
-// ─────────────────────────────────────────────────────────────────────────────
-function ProviderCard({
-  p,
-  onToggle,
-  onSelect,
-}: {
-  p: ProviderUsage;
-  onToggle: (off: boolean) => void;
-  onSelect: () => void;
-}) {
-  const tone = providerStateTone(p.state);
+function ProviderCard({ p, onSelect }: { p: ProviderUsageRow; onSelect: () => void }) {
+  const tone = p.error_rate_pct > 20 ? 'crit' : p.error_rate_pct > 5 ? 'warn' : p.requests > 0 ? 'ok' : 'dim';
   return (
     <div
       className="panel relative overflow-hidden cursor-pointer hover:border-info/40 transition-colors"
       onClick={onSelect}
-      style={{
-        boxShadow: p.state === 'error' ? '0 0 0 1px rgba(239,68,68,.35)' : undefined,
-      }}
+      style={p.error_rate_pct > 20 ? { boxShadow: '0 0 0 1px rgba(239,68,68,.35)' } : undefined}
     >
       <div className="severity-stripe" style={{ background: p.color }} />
       <div className="px-3 py-2 border-b border-line flex items-center gap-2">
         <span className={`dot dot-${tone}`} />
-        <span className="font-semibold text-fg text-sm">{p.name}</span>
-        <Pill tone={tone}>{providerStateLabel(p.state)}</Pill>
+        <span className="font-semibold text-fg text-sm">{p.display_name}</span>
+        <Pill tone={tone === 'dim' ? 'dim' : tone}>{p.active_keys}/{p.total_keys} keys</Pill>
         <div className="flex-1" />
-        <Switch
-          checked={p.enabled}
-          onChange={(v) => onToggle(!v)}
-        />
+        <span className="text-2xs text-mute mono">{p.name}</span>
       </div>
       <div className="p-3 grid grid-cols-2 gap-2 text-xs">
         <div>
-          <div className="text-2xs text-mute">Tokens/min</div>
-          <div className="mono text-fg text-base font-semibold">{p.tokensPerMin.toLocaleString()}</div>
+          <div className="text-2xs text-mute">Tokens (window)</div>
+          <div className="mono text-fg text-base font-semibold">{p.tokens.toLocaleString()}</div>
         </div>
         <div>
-          <div className="text-2xs text-mute">Req/min</div>
-          <div className="mono text-fg text-base font-semibold">{p.reqPerMin}</div>
+          <div className="text-2xs text-mute">Requests</div>
+          <div className="mono text-fg text-base font-semibold">{p.requests.toLocaleString()}</div>
         </div>
         <div>
-          <div className="text-2xs text-mute">$/ชม</div>
-          <div className="mono text-warn text-base font-semibold">${p.costUsdPerHr.toFixed(2)}</div>
+          <div className="text-2xs text-mute">Tokens วันนี้</div>
+          <div className="mono text-info text-base font-semibold">{p.tokens_today.toLocaleString()}</div>
         </div>
         <div>
           <div className="text-2xs text-mute">Error rate</div>
-          <div className={`mono text-base font-semibold ${p.errorRatePct > 5 ? 'text-crit' : p.errorRatePct > 2 ? 'text-warn' : 'text-ok'}`}>
-            {p.errorRatePct.toFixed(1)}%
+          <div className={`mono text-base font-semibold ${p.error_rate_pct > 20 ? 'text-crit' : p.error_rate_pct > 5 ? 'text-warn' : 'text-ok'}`}>
+            {p.error_rate_pct.toFixed(1)}%
           </div>
         </div>
         <div>
           <div className="text-2xs text-mute">Latency avg / p95</div>
           <div className="mono text-fg">
-            {p.avgLatencyMs}ms <span className="text-mute">/ {p.p95LatencyMs}ms</span>
+            {p.avg_latency_ms}ms <span className="text-mute">/ {p.p95_latency_ms}ms</span>
           </div>
         </div>
         <div>
-          <div className="text-2xs text-mute">Uptime 24h</div>
-          <div className={`mono font-semibold ${p.uptime24hPct < 98 ? 'text-warn' : 'text-ok'}`}>
-            {p.uptime24hPct.toFixed(1)}%
-          </div>
+          <div className="text-2xs text-mute">Tokens เดือนนี้</div>
+          <div className="mono text-fg">{p.tokens_month.toLocaleString()}</div>
         </div>
       </div>
       <div className="px-3 pb-3">
-        <MiniSpark data={p.series60min} color={p.color} />
-        <div className="flex justify-between text-2xs text-mute mt-1 mono">
-          <span>{p.models.length} models</span>
-          <span>{p.keys.filter((k) => k.enabled).length}/{p.keys.length} keys ใช้งาน</span>
-        </div>
+        <MiniSpark series={p.series} color={p.color} buckets={p.series_buckets} />
       </div>
     </div>
   );
 }
 
-function MiniSpark({ data, color }: { data: number[]; color: string }) {
+function MiniSpark({ series, color, buckets }: { series: ProviderUsageRow['series']; color: string; buckets: number }) {
   const w = 280;
   const h = 36;
-  const min = Math.min(...data);
-  const max = Math.max(...data);
+  if (series.length === 0) {
+    return (
+      <div className="text-2xs text-mute text-center py-2 italic">— ไม่มีกิจกรรมในช่วงนี้ —</div>
+    );
+  }
+  const vals = series.map((s) => s.tokens);
+  const min = Math.min(0, ...vals);
+  const max = Math.max(1, ...vals);
   const range = max - min || 1;
-  const step = w / (data.length - 1);
-  const points = data.map((v, i) => `${(i * step).toFixed(1)},${(h - ((v - min) / range) * (h - 2) - 1).toFixed(1)}`).join(' ');
+  const step = w / Math.max(1, buckets - 1);
+  // Pad sparse series so the line still spans the full width.
+  const points = series.map((s, i) => {
+    const x = (i / Math.max(1, series.length - 1)) * w;
+    const y = h - ((s.tokens - min) / range) * (h - 2) - 1;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
   return (
     <svg viewBox={`0 0 ${w} ${h}`} width="100%" height={h} preserveAspectRatio="none">
       <polyline points={points} fill="none" stroke={color} strokeWidth={1.4} strokeLinejoin="round" />
@@ -553,37 +488,33 @@ function MiniSpark({ data, color }: { data: number[]; color: string }) {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Big multi-provider line chart — 60-min window, all providers overlaid.
-// Click a legend chip to focus, "all" to reset.
-// ─────────────────────────────────────────────────────────────────────────────
 function UsageChart({
   providers,
   allProviders,
   selectedProvider,
   onSelectProvider,
+  hours,
 }: {
-  providers: ProviderUsage[];
-  allProviders: ProviderUsage[];
+  providers: ProviderUsageRow[];
+  allProviders: ProviderUsageRow[];
   selectedProvider: string | 'all';
   onSelectProvider: (id: string | 'all') => void;
+  hours: number;
 }) {
   const W = 1000;
-  const H = 220;
-  const PAD = { l: 44, r: 12, t: 12, b: 22 };
+  const H = 240;
+  const PAD = { l: 50, r: 12, t: 14, b: 24 };
   const innerW = W - PAD.l - PAD.r;
   const innerH = H - PAD.t - PAD.b;
 
-  const allValues = providers.flatMap((p) => p.series60min);
+  const allValues = providers.flatMap((p) => p.series.map((s) => s.tokens));
   const maxY = Math.max(1, ...allValues);
   const yTicks = 4;
 
-  const xStep = innerW / 59;
-
   return (
     <div className="panel">
-      <div className="px-3 py-2 border-b border-line flex items-center gap-2">
-        <span className="t-h">TOKENS / นาที · 60 นาทีล่าสุด</span>
+      <div className="px-3 py-2 border-b border-line flex items-center gap-2 flex-wrap">
+        <span className="t-h">TOKENS · {hours === 1 ? '1 ชั่วโมงล่าสุด (per minute)' : `${hours} ชั่วโมงล่าสุด (per hour)`}</span>
         <div className="flex-1" />
         <div className="flex gap-1 flex-wrap">
           <button
@@ -594,20 +525,19 @@ function UsageChart({
           </button>
           {allProviders.map((p) => (
             <button
-              key={p.id}
-              onClick={() => onSelectProvider(p.id)}
-              className={`pill ${selectedProvider === p.id ? 'pill-info' : 'pill-dim'}`}
-              style={selectedProvider === p.id ? { borderColor: p.color, color: p.color } : undefined}
+              key={p.name}
+              onClick={() => onSelectProvider(p.name)}
+              className={`pill ${selectedProvider === p.name ? 'pill-info' : 'pill-dim'}`}
+              style={selectedProvider === p.name ? { borderColor: p.color, color: p.color } : undefined}
             >
               <span className="w-2 h-2 rounded-full" style={{ background: p.color }} />
-              {p.name}
+              {p.display_name}
             </button>
           ))}
         </div>
       </div>
       <div className="p-2">
         <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none">
-          {/* Grid + y labels */}
           {Array.from({ length: yTicks + 1 }, (_, i) => {
             const y = PAD.t + (innerH * i) / yTicks;
             const val = Math.round(maxY - (maxY * i) / yTicks);
@@ -620,26 +550,17 @@ function UsageChart({
               </g>
             );
           })}
-          {/* X labels — every 10 min */}
-          {[60, 50, 40, 30, 20, 10, 0].map((mins, i) => {
-            const x = PAD.l + (innerW * i) / 6;
-            return (
-              <text key={mins} x={x} y={H - 6} textAnchor="middle" fontSize="9" fill="#6b7280" fontFamily="monospace">
-                {mins === 0 ? 'now' : `-${mins}m`}
-              </text>
-            );
-          })}
-          {/* Lines */}
           {providers.map((p) => {
-            const pts = p.series60min
-              .map((v, i) => {
-                const x = PAD.l + i * xStep;
-                const y = PAD.t + innerH - (v / maxY) * innerH;
+            if (p.series.length === 0) return null;
+            const pts = p.series
+              .map((s, i) => {
+                const x = PAD.l + (i / Math.max(1, p.series.length - 1)) * innerW;
+                const y = PAD.t + innerH - (s.tokens / maxY) * innerH;
                 return `${x.toFixed(1)},${y.toFixed(1)}`;
               })
               .join(' ');
             return (
-              <g key={p.id}>
+              <g key={p.name}>
                 <polyline
                   points={pts}
                   fill="none"
@@ -647,18 +568,17 @@ function UsageChart({
                   strokeWidth={1.6}
                   strokeLinejoin="round"
                   strokeLinecap="round"
-                  opacity={p.enabled ? 1 : 0.3}
+                  opacity={p.is_active ? 1 : 0.3}
                 />
                 <polyline
                   points={`${pts} ${PAD.l + innerW},${PAD.t + innerH} ${PAD.l},${PAD.t + innerH}`}
                   fill={p.color}
                   opacity={0.07}
                 />
-                {/* End-of-line dot */}
                 {(() => {
-                  const last = p.series60min[p.series60min.length - 1];
-                  const x = PAD.l + (p.series60min.length - 1) * xStep;
-                  const y = PAD.t + innerH - (last / maxY) * innerH;
+                  const last = p.series[p.series.length - 1];
+                  const x = PAD.l + innerW;
+                  const y = PAD.t + innerH - (last.tokens / maxY) * innerH;
                   return (
                     <>
                       <circle cx={x} cy={y} r={3.2} fill={p.color} opacity={0.4}>
@@ -678,19 +598,14 @@ function UsageChart({
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Single alert rule editor card
-// ─────────────────────────────────────────────────────────────────────────────
 function AlertRuleCard({
   rule,
   providers,
-  onToggle,
   onUpdate,
   onDelete,
 }: {
   rule: AlertRule;
-  providers: ProviderUsage[];
-  onToggle: () => void;
+  providers: ProviderUsageRow[];
   onUpdate: (patch: Partial<AlertRule>) => void;
   onDelete: () => void;
 }) {
@@ -698,11 +613,7 @@ function AlertRuleCard({
   return (
     <div
       className="panel p-3"
-      style={
-        isFired
-          ? { boxShadow: '0 0 0 1px rgba(239,68,68,.5), 0 0 24px rgba(239,68,68,.18)' }
-          : undefined
-      }
+      style={isFired ? { boxShadow: '0 0 0 1px rgba(239,68,68,.5), 0 0 24px rgba(239,68,68,.18)' } : undefined}
     >
       <div className="flex items-center gap-2 mb-2">
         <span className={`dot dot-${isFired ? 'crit' : rule.enabled ? 'ok' : 'mute'}`} />
@@ -711,23 +622,28 @@ function AlertRuleCard({
           onChange={(e) => onUpdate({ name: e.target.value })}
           className="text-sm font-semibold text-fg bg-transparent border-0 px-1 py-0.5 flex-1 focus:outline focus:outline-1 focus:outline-info"
         />
-        {isFired && (
-          <Pill tone="crit">🚨 ติด · {rule.lastTriggeredAt}</Pill>
-        )}
-        <Switch checked={rule.enabled} onChange={onToggle} />
+        {isFired && <Pill tone="crit">🚨 ติด · {rule.lastTriggeredAt}</Pill>}
+        <label className="flex items-center gap-1 text-2xs">
+          <input
+            type="checkbox"
+            checked={rule.enabled}
+            onChange={(e) => onUpdate({ enabled: e.target.checked })}
+          />
+          <span className="text-fg">เปิด</span>
+        </label>
         <button className="btn btn-ghost text-2xs" onClick={onDelete} title="ลบกฎ">×</button>
       </div>
       <div className="grid grid-cols-12 gap-2 text-xs">
         <label className="col-span-3">
           <div className="text-2xs text-mute mb-0.5">Provider</div>
           <select
-            value={rule.providerId}
-            onChange={(e) => onUpdate({ providerId: e.target.value as AlertRule['providerId'] })}
+            value={rule.providerName}
+            onChange={(e) => onUpdate({ providerName: e.target.value })}
             className="w-full px-2 py-1"
           >
             <option value="any">ทุกราย (any)</option>
             {providers.map((p) => (
-              <option key={p.id} value={p.id}>{p.name}</option>
+              <option key={p.name} value={p.name}>{p.display_name}</option>
             ))}
           </select>
         </label>
@@ -747,7 +663,7 @@ function AlertRuleCard({
           <div className="text-2xs text-mute mb-0.5">เงื่อนไข</div>
           <select
             value={rule.op}
-            onChange={(e) => onUpdate({ op: e.target.value as AlertOperator })}
+            onChange={(e) => onUpdate({ op: e.target.value as AlertOp })}
             className="w-full px-2 py-1 mono"
           >
             <option value=">">&gt;</option>
@@ -766,27 +682,6 @@ function AlertRuleCard({
           />
         </label>
       </div>
-      <div className="mt-2 flex items-center gap-3 text-2xs">
-        <span className="text-mute">แจ้งทาง:</span>
-        {(['toast', 'desktop', 'sound'] as const).map((ch) => (
-          <label key={ch} className="flex items-center gap-1 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={rule.notifyChannels.includes(ch)}
-              onChange={(e) => {
-                const set = new Set(rule.notifyChannels);
-                if (e.target.checked) set.add(ch);
-                else set.delete(ch);
-                onUpdate({ notifyChannels: Array.from(set) as AlertRule['notifyChannels'] });
-              }}
-            />
-            <span className="text-fg">{ch === 'toast' ? '🔔 toast' : ch === 'desktop' ? '🖥 desktop' : '🔊 เสียง'}</span>
-          </label>
-        ))}
-      </div>
-      {rule.notes && (
-        <div className="text-2xs text-mute mt-2 italic">{rule.notes}</div>
-      )}
     </div>
   );
 }
