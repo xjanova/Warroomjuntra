@@ -14,6 +14,13 @@ import { Pill } from '@/components/ui/Pill';
 import { pairConnection, verifyConnection, fetchPlaygroundProviders, eveChat, type PlaygroundProvider } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import {
+  getVoices,
+  isSpeechRecognitionSupported,
+  isSpeechSynthesisSupported,
+  speak as ttsSpeak,
+} from '@/lib/eve/voice';
+import { ACTION_VOCABULARY } from '@/lib/eve/actions';
+import {
   Plug,
   Bell,
   Volume2,
@@ -557,9 +564,307 @@ function EveTab() {
         )}
       </div>
 
+      <EveVoicePanel />
+      <EveSafetyPanel />
+      <EveActionsHelpPanel />
+
       <div className="text-2xs text-mute">
         💡 เปลี่ยน provider แล้วกดทดสอบเพื่อดูว่าตอบไหวก่อนใช้จริง · settings ถูก persist อัตโนมัติทุก keystroke
       </div>
+    </div>
+  );
+}
+
+// ---------- Sub-panel: Eve voice (mic + TTS) ----------
+
+function EveVoicePanel() {
+  const voice = useSettings((s) => s.eve.voice);
+  const setEveListen = useSettings((s) => s.setEveListen);
+  const setEveSpeak = useSettings((s) => s.setEveSpeak);
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const micSupported = useMemo(() => isSpeechRecognitionSupported(), []);
+  const ttsSupported = useMemo(() => isSpeechSynthesisSupported(), []);
+
+  useEffect(() => {
+    if (!ttsSupported) return;
+    void getVoices().then(setVoices);
+  }, [ttsSupported]);
+
+  const thaiVoices = voices.filter((v) => v.lang?.toLowerCase().startsWith('th'));
+  const otherVoices = voices.filter((v) => !v.lang?.toLowerCase().startsWith('th'));
+
+  const sample = () => {
+    if (!ttsSupported) {
+      alert('เบราว์เซอร์นี้ไม่รองรับ SpeechSynthesis');
+      return;
+    }
+    ttsSpeak('สวัสดีค่ะ พี่ — ทดสอบเสียง Eve นะคะ ถ้าได้ยินชัดแสดงว่าตั้งค่าเสียงพร้อมแล้วค่ะ', {
+      voiceName: voice.speak.voiceName,
+      rate: voice.speak.rate,
+      pitch: voice.speak.pitch,
+      volume: voice.speak.volume,
+      interruptOnNew: true,
+    });
+  };
+
+  return (
+    <>
+      {/* ── Voice input (mic) ────────────────────────────────────────── */}
+      <div className="panel p-3 space-y-3">
+        <div className="flex items-center gap-2">
+          <span className="t-h">ฟังเสียงสั่ง (Mic)</span>
+          <Pill tone={voice.listen.enabled ? 'mystic' : 'dim'}>
+            {voice.listen.enabled ? 'เปิด' : 'ปิด'}
+          </Pill>
+          <div className="flex-1" />
+          <Switch
+            checked={voice.listen.enabled}
+            onChange={(v) => setEveListen({ enabled: v })}
+          />
+        </div>
+
+        {!micSupported && (
+          <div className="text-2xs text-warn">
+            ⚠ เบราว์เซอร์นี้ไม่รองรับ SpeechRecognition — ใช้ Chrome/Edge บน Windows/macOS หรือ Safari 14.1+
+          </div>
+        )}
+
+        <div>
+          <label className="text-2xs text-mute block mb-1">ภาษา</label>
+          <select
+            value={voice.listen.lang}
+            onChange={(e) => setEveListen({ lang: e.target.value })}
+            className="w-full px-2 py-1.5"
+            disabled={!voice.listen.enabled}
+          >
+            <option value="th-TH">ไทย (th-TH)</option>
+            <option value="en-US">English US (en-US)</option>
+            <option value="en-GB">English UK (en-GB)</option>
+          </select>
+        </div>
+
+        <label className="flex items-center gap-2">
+          <Switch
+            checked={voice.listen.continuous}
+            onChange={(v) => setEveListen({ continuous: v })}
+            disabled={!voice.listen.enabled}
+          />
+          <div>
+            <div className="text-fg">โหมดฟังต่อเนื่อง</div>
+            <div className="text-2xs text-mute">
+              เปิดไว้ = mic ค้างเปิด คลิกอีกครั้งเพื่อหยุด · ปิด = pushtotalk (พูดจบแล้ว mic ปิดเอง)
+            </div>
+          </div>
+        </label>
+
+        <label className="flex items-center gap-2">
+          <Switch
+            checked={voice.listen.autoSendOnFinal}
+            onChange={(v) => setEveListen({ autoSendOnFinal: v })}
+            disabled={!voice.listen.enabled}
+          />
+          <div>
+            <div className="text-fg">ส่งทันทีเมื่อพูดจบ</div>
+            <div className="text-2xs text-mute">
+              ปิด = แค่เอา transcript ใส่ช่องพิมพ์ ให้พี่กด Enter เอง
+            </div>
+          </div>
+        </label>
+      </div>
+
+      {/* ── Voice output (TTS) ───────────────────────────────────────── */}
+      <div className="panel p-3 space-y-3">
+        <div className="flex items-center gap-2">
+          <span className="t-h">พูดตอบ (TTS)</span>
+          <Pill tone={voice.speak.enabled ? 'mystic' : 'dim'}>
+            {voice.speak.enabled ? 'เปิด' : 'ปิด'}
+          </Pill>
+          <div className="flex-1" />
+          <Switch
+            checked={voice.speak.enabled}
+            onChange={(v) => setEveSpeak({ enabled: v })}
+          />
+        </div>
+
+        {!ttsSupported && (
+          <div className="text-2xs text-warn">
+            ⚠ เบราว์เซอร์นี้ไม่รองรับ SpeechSynthesis
+          </div>
+        )}
+
+        <div>
+          <label className="text-2xs text-mute block mb-1">เสียง</label>
+          <select
+            value={voice.speak.voiceName ?? ''}
+            onChange={(e) => setEveSpeak({ voiceName: e.target.value || null })}
+            className="w-full px-2 py-1.5"
+            disabled={!voice.speak.enabled}
+          >
+            <option value="">เลือกอัตโนมัติ (Thai voice ที่ดีที่สุด)</option>
+            {thaiVoices.length > 0 && (
+              <optgroup label="ภาษาไทย">
+                {thaiVoices.map((v) => (
+                  <option key={v.name} value={v.name}>
+                    {v.name} · {v.lang}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            {otherVoices.length > 0 && (
+              <optgroup label="ภาษาอื่น">
+                {otherVoices.slice(0, 30).map((v) => (
+                  <option key={v.name} value={v.name}>
+                    {v.name} · {v.lang}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+          </select>
+          {voices.length === 0 && ttsSupported && (
+            <div className="text-2xs text-mute mt-1">กำลังโหลดรายชื่อเสียง...</div>
+          )}
+        </div>
+
+        <div className="grid grid-cols-3 gap-3">
+          <div>
+            <label className="text-2xs text-mute block mb-1">
+              ความเร็ว <span className="mono text-fg">{voice.speak.rate.toFixed(2)}x</span>
+            </label>
+            <input
+              type="range" min={0.5} max={2.0} step={0.05}
+              value={voice.speak.rate}
+              onChange={(e) => setEveSpeak({ rate: Number(e.target.value) })}
+              disabled={!voice.speak.enabled}
+              className="w-full"
+            />
+          </div>
+          <div>
+            <label className="text-2xs text-mute block mb-1">
+              เสียงสูงต่ำ <span className="mono text-fg">{voice.speak.pitch.toFixed(2)}</span>
+            </label>
+            <input
+              type="range" min={0} max={2} step={0.1}
+              value={voice.speak.pitch}
+              onChange={(e) => setEveSpeak({ pitch: Number(e.target.value) })}
+              disabled={!voice.speak.enabled}
+              className="w-full"
+            />
+          </div>
+          <div>
+            <label className="text-2xs text-mute block mb-1">
+              ความดัง <span className="mono text-fg">{Math.round(voice.speak.volume * 100)}%</span>
+            </label>
+            <input
+              type="range" min={0} max={1} step={0.05}
+              value={voice.speak.volume}
+              onChange={(e) => setEveSpeak({ volume: Number(e.target.value) })}
+              disabled={!voice.speak.enabled}
+              className="w-full"
+            />
+          </div>
+        </div>
+
+        <label className="flex items-center gap-2">
+          <Switch
+            checked={voice.speak.interruptOnNew}
+            onChange={(v) => setEveSpeak({ interruptOnNew: v })}
+            disabled={!voice.speak.enabled}
+          />
+          <div>
+            <div className="text-fg">ตัดเสียงเก่าเมื่อมีคำตอบใหม่</div>
+            <div className="text-2xs text-mute">ป้องกัน Eve พูดทับเสียงตัวเอง</div>
+          </div>
+        </label>
+
+        <div>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={sample}
+            disabled={!voice.speak.enabled || !ttsSupported}
+          >
+            ▶ ทดสอบเสียง
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ---------- Sub-panel: Eve safety guard rails ----------
+
+function EveSafetyPanel() {
+  const safety = useSettings((s) => s.eve.safety);
+  const setEveSafety = useSettings((s) => s.setEveSafety);
+
+  return (
+    <div className="panel p-3 space-y-3">
+      <div className="t-h">ความปลอดภัย</div>
+
+      <label className="flex items-center gap-2">
+        <Switch
+          checked={safety.confirmDestructive}
+          onChange={(v) => setEveSafety({ confirmDestructive: v })}
+        />
+        <div>
+          <div className="text-fg">ยืนยันก่อนทำคำสั่งเสี่ยง</div>
+          <div className="text-2xs text-mute">
+            อนุมัติถอน / refund / cancel / ban — Eve จะ "เสนอ" ผ่าน toast แทนการลงมือเอง (แนะนำให้เปิดไว้)
+          </div>
+        </div>
+      </label>
+
+      <label className="flex items-center gap-2">
+        <Switch
+          checked={safety.allowAutonomousNavigate}
+          onChange={(v) => setEveSafety({ allowAutonomousNavigate: v })}
+        />
+        <div>
+          <div className="text-fg">อนุญาตให้ Eve นำทางเอง</div>
+          <div className="text-2xs text-mute">
+            ปิด = Eve เสนอผ่าน toast แทนการกระโดดหน้าเอง · เปิด = สั่ง "เปิดหน้าบิล" แล้วไปทันที
+          </div>
+        </div>
+      </label>
+    </div>
+  );
+}
+
+// ---------- Sub-panel: action vocabulary (read-only help) ----------
+
+function EveActionsHelpPanel() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="panel p-3">
+      <button
+        type="button"
+        className="w-full flex items-center gap-2 text-left"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="t-h">คำสั่งที่ Eve เข้าใจ</span>
+        <span className="text-2xs text-mute">({ACTION_VOCABULARY.length})</span>
+        <div className="flex-1" />
+        <span className="text-mute text-2xs">{open ? '▾' : '▸'}</span>
+      </button>
+      {open && (
+        <div className="mt-2 space-y-1 text-2xs">
+          {ACTION_VOCABULARY.map((a) => (
+            <div key={a.tag} className="flex items-start gap-2 leading-relaxed">
+              <code className={cn(
+                'mono px-1.5 py-0.5 rounded shrink-0',
+                a.destructive ? 'bg-warn/15 text-warn' : 'bg-info/10 text-info',
+              )}>
+                {a.syntax}
+              </code>
+              <span className="text-mute">{a.description}</span>
+            </div>
+          ))}
+          <div className="text-2xs text-mute mt-2 pt-2 border-t border-line">
+            💡 ลองพูด/พิมพ์: <i>"เปิดหน้าบิล"</i> · <i>"รีเฟรช"</i> · <i>"แช่แข็ง"</i> · <i>"ลูกค้า 42"</i> ·{' '}
+            <i>"เคส r-1234"</i>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

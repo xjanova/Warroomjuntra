@@ -53,6 +53,27 @@ export type ShiftConfig = {
   handoverNote: string;
 };
 
+export type EveVoiceListen = {
+  enabled: boolean;        // mic on at all
+  lang: string;            // 'th-TH' | 'en-US' | ...
+  continuous: boolean;     // true = always-listening mode (click to start, click to stop); false = push-to-talk only
+  autoSendOnFinal: boolean;// auto-submit when SpeechRecognition emits final transcript
+};
+
+export type EveVoiceSpeak = {
+  enabled: boolean;        // Eve speaks her replies via TTS
+  voiceName: string | null;// browser voice; null = pick best Thai voice automatically
+  rate: number;            // 0.5..2.0 — playback speed
+  pitch: number;           // 0..2.0
+  volume: number;          // 0..1
+  interruptOnNew: boolean; // cancel current utterance when a new reply arrives
+};
+
+export type EveSafetyConfig = {
+  confirmDestructive: boolean; // Eve must propose (toast) instead of executing approve/reject/refund/cancel
+  allowAutonomousNavigate: boolean; // false = even GOTO needs operator click; true = execute immediately
+};
+
 export type EveConfig = {
   provider: string;      // e.g. 'groq' | 'gemini' | 'anthropic' | 'openai' | 'deepseek' | 'qwen'
   model: string;         // e.g. 'llama-3.3-70b-versatile'
@@ -60,6 +81,11 @@ export type EveConfig = {
   maxTokens: number;     // 64..1024
   enabled: boolean;      // master switch for Eve dock
   passContext: boolean;  // include warroom state hint in /eve/chat body
+  voice: {
+    listen: EveVoiceListen;
+    speak: EveVoiceSpeak;
+  };
+  safety: EveSafetyConfig;
 };
 
 type SettingsState = {
@@ -88,6 +114,9 @@ type SettingsState = {
   setRefreshInterval: (v: RefreshInterval) => void;
   setShift: (patch: Partial<ShiftConfig>) => void;
   setEve: (patch: Partial<EveConfig>) => void;
+  setEveListen: (patch: Partial<EveVoiceListen>) => void;
+  setEveSpeak: (patch: Partial<EveVoiceSpeak>) => void;
+  setEveSafety: (patch: Partial<EveSafetyConfig>) => void;
 
   resetAll: () => void;
 };
@@ -134,6 +163,26 @@ const DEFAULT_EVE: EveConfig = {
   maxTokens: 320,
   enabled: true,
   passContext: true,
+  voice: {
+    listen: {
+      enabled: false,
+      lang: 'th-TH',
+      continuous: false,
+      autoSendOnFinal: true,
+    },
+    speak: {
+      enabled: false,
+      voiceName: null,
+      rate: 1.0,
+      pitch: 1.0,
+      volume: 1.0,
+      interruptOnNew: true,
+    },
+  },
+  safety: {
+    confirmDestructive: true,
+    allowAutonomousNavigate: true,
+  },
 };
 
 export const useSettings = create<SettingsState>()(
@@ -204,6 +253,33 @@ export const useSettings = create<SettingsState>()(
       setShift: (patch) => set((s) => ({ shift: { ...s.shift, ...patch } })),
       setEve: (patch) => set((s) => ({ eve: { ...s.eve, ...patch } })),
 
+      setEveListen: (patch) =>
+        set((s) => ({
+          eve: {
+            ...s.eve,
+            voice: {
+              ...s.eve.voice,
+              listen: { ...s.eve.voice.listen, ...patch },
+            },
+          },
+        })),
+
+      setEveSpeak: (patch) =>
+        set((s) => ({
+          eve: {
+            ...s.eve,
+            voice: {
+              ...s.eve.voice,
+              speak: { ...s.eve.voice.speak, ...patch },
+            },
+          },
+        })),
+
+      setEveSafety: (patch) =>
+        set((s) => ({
+          eve: { ...s.eve, safety: { ...s.eve.safety, ...patch } },
+        })),
+
       resetAll: () =>
         set({
           connection: DEFAULT_CONNECTION,
@@ -219,7 +295,25 @@ export const useSettings = create<SettingsState>()(
     {
       name: 'warroom-settings.v1',
       storage: createJSONStorage(() => localStorage),
-      version: 1,
+      version: 2,
+      // Old v1 payloads predate eve.voice / eve.safety. Fill missing defaults
+      // before zustand merges into state (otherwise EveChatBody crashes on first
+      // render with `Cannot read properties of undefined (reading 'speak')`).
+      migrate: (persisted, fromVersion) => {
+        const p = (persisted ?? {}) as Partial<SettingsState>;
+        if (fromVersion < 2 && p.eve) {
+          p.eve = {
+            ...DEFAULT_EVE,
+            ...p.eve,
+            voice: {
+              listen: { ...DEFAULT_EVE.voice.listen, ...((p.eve as Partial<EveConfig>).voice?.listen ?? {}) },
+              speak: { ...DEFAULT_EVE.voice.speak, ...((p.eve as Partial<EveConfig>).voice?.speak ?? {}) },
+            },
+            safety: { ...DEFAULT_EVE.safety, ...((p.eve as Partial<EveConfig>).safety ?? {}) },
+          };
+        }
+        return p as SettingsState;
+      },
       // re-hydrating an in-flight 'testing' status would lie about reality
       partialize: (state) => ({
         connection: {

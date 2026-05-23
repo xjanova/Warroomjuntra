@@ -222,6 +222,8 @@ input:focus, select:focus, textarea:focus {
 
 /* ===== Switch ===== */
 .switch { position:relative; display:inline-block; width:30px; height:16px; }
+.switch-disabled { opacity:.4; cursor:not-allowed; }
+.switch-disabled .switch-slider { cursor:not-allowed; }
 .switch input { display:none; }
 .switch-slider {
   position:absolute; inset:0;
@@ -870,6 +872,25 @@ table.dense tbody tr.selected { background: rgba(34,211,238,.08); }
   font-family: inherit;
 }
 .eve-input button:hover { filter: brightness(1.1); }
+
+/* Mic button — outlined when idle, pulses violet→pink when listening */
+.eve-mic-btn {
+  background: rgba(139, 92, 246, .12) !important;
+  border: 1px solid rgba(139, 92, 246, .35) !important;
+  color: rgba(196, 181, 253, .9) !important;
+  padding: 0 10px !important;
+}
+.eve-mic-btn:hover { filter: brightness(1.2); }
+.eve-mic-btn-active {
+  background: linear-gradient(135deg, #ef4444, #db2777) !important;
+  border-color: transparent !important;
+  color: #fff !important;
+  animation: eve-mic-pulse 1.4s ease-in-out infinite;
+}
+@keyframes eve-mic-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, .55); }
+  50%      { box-shadow: 0 0 0 6px rgba(239, 68, 68, 0); }
+}
 
 /* ============ MOOD SWITCHER ============ */
 .eve-moods {

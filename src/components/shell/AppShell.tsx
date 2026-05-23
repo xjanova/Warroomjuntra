@@ -12,6 +12,7 @@ import { CaseDetailDrawer } from '@/components/drawers/CaseDetailDrawer';
 import { Customer360Drawer } from '@/components/drawers/Customer360Drawer';
 import { SettingsDrawer } from '@/components/drawers/SettingsDrawer';
 import { SettingsBridge } from './SettingsBridge';
+import { EveBridge } from './EveBridge';
 import { useWarroom } from '@/lib/stores/warroom';
 import { cn } from '@/lib/utils';
 
@@ -36,6 +37,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <SettingsDrawer />
       <Eve />
       <SettingsBridge />
+      <EveBridge />
     </div>
   );
 }

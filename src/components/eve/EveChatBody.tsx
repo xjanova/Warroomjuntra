@@ -1,10 +1,25 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useEve, type EveMood } from '@/lib/stores/eve';
 import { useSettings, isPaired as isPairedFn } from '@/lib/stores/settings';
 import { eveChat, describeError } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import {
+  startListening,
+  speak as ttsSpeak,
+  cancelSpeech,
+  isSpeechRecognitionSupported,
+  isSpeechSynthesisSupported,
+  type ListenHandle,
+} from '@/lib/eve/voice';
+import {
+  parseActions,
+  executeActions,
+  stripActionTags,
+  buildActionInstructions,
+} from '@/lib/eve/actions';
+import { detectIntent } from '@/lib/eve/intents';
 
 type Responder = { match: RegExp; mood: EveMood; reply: string };
 
@@ -73,53 +88,112 @@ export function EveChatBody({
 }) {
   const { typing, messages, setMood, setTyping, addMessage } = useEve();
   const [draft, setDraft] = useState('');
+  const [listening, setListening] = useState(false);
+  const [interim, setInterim] = useState('');
   const msgsRef = useRef<HTMLDivElement>(null);
+  const listenHandleRef = useRef<ListenHandle | null>(null);
+
   const paired = useSettings((s) => isPairedFn(s));
   const eveCfg = useSettings((s) => s.eve);
 
+  // Memoize the action-vocabulary instructions so we don't rebuild on every keystroke.
+  const actionInstructions = useMemo(() => buildActionInstructions(), []);
+
+  // Speak any reply from Eve (TTS) — only if user enabled it in Settings.
+  const speakReply = useCallback(
+    (text: string) => {
+      if (!eveCfg.voice.speak.enabled) return;
+      if (!isSpeechSynthesisSupported()) return;
+      const clean = text.replace(/<[^>]+>/g, '');
+      if (!clean.trim()) return;
+      ttsSpeak(clean, {
+        voiceName: eveCfg.voice.speak.voiceName,
+        rate: eveCfg.voice.speak.rate,
+        pitch: eveCfg.voice.speak.pitch,
+        volume: eveCfg.voice.speak.volume,
+        interruptOnNew: eveCfg.voice.speak.interruptOnNew,
+        lang: eveCfg.voice.listen.lang,
+      });
+    },
+    [eveCfg.voice],
+  );
+
   const respond = useCallback(
     async (text: string) => {
+      // ── Phase A: client-side intent. If we can satisfy the request locally
+      //    (navigate, refresh, toggle, open drawer), do it now — no LLM round
+      //    trip needed. Eve speaks an immediate ack.
+      const intent = detectIntent(text);
+      if (intent) {
+        const results = executeActions(intent.actions);
+        const ack = intent.spokenAck ?? 'จัดการให้แล้วค่ะ ✦';
+        addMessage({ role: 'eve', text: ack });
+        setMood('happy');
+        speakReply(ack);
+        setTimeout(() => setMood('idle'), 2000);
+
+        // If any action failed (e.g. opened a non-existent drawer), tack on a heads-up.
+        const failed = results.filter((r) => !r.ok);
+        if (failed.length > 0) {
+          const msg = 'แต่มีบางอย่างขัดข้องค่ะ: ' + failed.map((r) => r.message).join(' · ');
+          addMessage({ role: 'eve', text: '<small class="text-2xs">' + msg + '</small>' });
+        }
+        return;
+      }
+
+      // ── Phase B: no clear intent → ask the LLM.
       setMood('thinking');
       setTyping(true);
 
       // Paired? → real LLM via /api/admin/eve/chat
       if (paired) {
         // Build conversation history from store. Drop HTML tags so the LLM
-        // sees plain Thai, not <b> markup.
+        // sees plain Thai, not <b> markup. Strip action tags too — they're
+        // side-channel commands, not narrative.
         const history = messages
           .slice(-10)
           .map((m) => ({
             role: (m.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
-            content: m.text.replace(/<[^>]+>/g, '').slice(0, 500),
+            content: stripActionTags(m.text.replace(/<[^>]+>/g, '')).slice(0, 500),
           }));
 
         try {
           const res = await eveChat({
             message: text,
             history,
-            // Pass live operator-configured provider + model so the SettingsDrawer
-            // Eve tab actually takes effect. If passContext is off, skip the hint.
             provider: eveCfg.provider,
             model: eveCfg.model,
             temperature: eveCfg.temperature,
             max_tokens: eveCfg.maxTokens,
+            // Inject the action vocabulary via context so the LLM (if backend
+            // includes context.tools in its system prompt) emits [TAG:args]
+            // markers. If backend ignores `tools`, we still get a plain reply.
             context: eveCfg.passContext
-              ? { source: 'warroom-dock', ts: new Date().toISOString() }
+              ? {
+                  source: 'warroom-dock',
+                  ts: new Date().toISOString(),
+                  tools: actionInstructions,
+                }
               : undefined,
           });
           setTyping(false);
-          // Convert plain newlines to <br> for display.
-          const html = (res.reply || 'Eve ตอบไม่ได้ในตอนนี้ค่ะ').replace(/\n/g, '<br>');
-          addMessage({ role: 'eve', text: html });
+
+          // Parse any action markers from the reply, execute, strip from display.
+          const reply = res.reply || 'Eve ตอบไม่ได้ในตอนนี้ค่ะ';
+          const actions = parseActions(reply);
+          if (actions.length > 0) executeActions(actions);
+
+          const displayText = stripActionTags(reply).replace(/\n/g, '<br>') ||
+            'จัดการให้แล้วค่ะ ✦';
+          addMessage({ role: 'eve', text: displayText });
           setMood(res.mood ?? 'talking');
+          speakReply(displayText);
           setTimeout(() => setMood('idle'), 2400);
           return;
         } catch (e) {
           setTyping(false);
-          addMessage({
-            role: 'eve',
-            text: '<i>ขออภัยค่ะ — เชื่อมต่อ AI ไม่สำเร็จ:</i><br><small class="text-2xs">' + describeError(e) + '</small>',
-          });
+          const err = '<i>ขออภัยค่ะ — เชื่อมต่อ AI ไม่สำเร็จ:</i><br><small class="text-2xs">' + describeError(e) + '</small>';
+          addMessage({ role: 'eve', text: err });
           setMood('concerned');
           setTimeout(() => setMood('idle'), 2400);
           return;
@@ -136,9 +210,10 @@ export function EveChatBody({
       setTyping(false);
       addMessage({ role: 'eve', text: reply });
       setMood(replyMood);
+      speakReply(reply);
       setTimeout(() => setMood('idle'), 2400);
     },
-    [paired, messages, setMood, setTyping, addMessage, eveCfg.provider, eveCfg.model, eveCfg.temperature, eveCfg.maxTokens, eveCfg.passContext],
+    [paired, messages, setMood, setTyping, addMessage, eveCfg.provider, eveCfg.model, eveCfg.temperature, eveCfg.maxTokens, eveCfg.passContext, actionInstructions, speakReply],
   );
 
   const onAction = useCallback((action: string) => {
@@ -159,9 +234,74 @@ export function EveChatBody({
     const v = draft.trim();
     if (!v) return;
     setDraft('');
+    setInterim('');
     addMessage({ role: 'user', text: v.replace(/</g, '&lt;') });
     respond(v);
   }, [draft, addMessage, respond]);
+
+  // ── Mic toggle ────────────────────────────────────────────────────────────
+  const toggleMic = useCallback(() => {
+    // Currently listening → stop
+    if (listening) {
+      listenHandleRef.current?.stop();
+      return;
+    }
+    if (!isSpeechRecognitionSupported()) {
+      addMessage({
+        role: 'eve',
+        text: '<i>เบราว์เซอร์นี้ไม่รองรับ SpeechRecognition</i> — ลองใช้ Chrome/Edge บน macOS/Windows ค่ะ',
+      });
+      return;
+    }
+    cancelSpeech(); // stop Eve mid-sentence so the mic doesn't pick it up
+    setInterim('');
+    const handle = startListening({
+      lang: eveCfg.voice.listen.lang || 'th-TH',
+      continuous: eveCfg.voice.listen.continuous,
+      interim: true,
+      onStart: () => setListening(true),
+      onPartial: (text) => setInterim(text),
+      onFinal: (text) => {
+        setInterim('');
+        if (eveCfg.voice.listen.autoSendOnFinal) {
+          addMessage({ role: 'user', text: text.replace(/</g, '&lt;') });
+          respond(text);
+        } else {
+          // Drop into the text box for the operator to confirm
+          setDraft((d) => (d ? d + ' ' + text : text));
+        }
+      },
+      onError: (kind, message) => {
+        setListening(false);
+        setInterim('');
+        if (kind === 'not-allowed') {
+          addMessage({
+            role: 'eve',
+            text: '<i>กรุณาอนุญาตการเข้าถึงไมโครโฟนในเบราว์เซอร์</i>',
+          });
+        } else if (kind !== 'no-speech') {
+          addMessage({
+            role: 'eve',
+            text: '<i>เกิดปัญหาฟังเสียง:</i> <small class="text-2xs">' + kind + (message ? ' — ' + message : '') + '</small>',
+          });
+        }
+      },
+      onEnd: () => {
+        setListening(false);
+        listenHandleRef.current = null;
+      },
+    });
+    listenHandleRef.current = handle;
+    if (!handle) setListening(false);
+  }, [listening, eveCfg.voice.listen, addMessage, respond]);
+
+  // Cleanup mic on unmount
+  useEffect(() => {
+    return () => {
+      listenHandleRef.current?.abort();
+      cancelSpeech();
+    };
+  }, []);
 
   useEffect(() => {
     const el = msgsRef.current;
@@ -179,6 +319,9 @@ export function EveChatBody({
     el.addEventListener('click', handler);
     return () => el.removeEventListener('click', handler);
   }, [onAction]);
+
+  const micSupported = isSpeechRecognitionSupported();
+  const micEnabledInSettings = eveCfg.voice.listen.enabled;
 
   return (
     <div className={cn('flex flex-col min-h-0', className)}>
@@ -207,6 +350,12 @@ export function EveChatBody({
             </span>
           </div>
         )}
+        {listening && (
+          <div className={cn(compact ? 'eve-msg user' : 'eve-msg eve-msg-lg user', 'opacity-70 italic')}>
+            <span className="mono text-2xs">● ฟังอยู่...</span>
+            {interim && <div className="text-fg mt-0.5">{interim}</div>}
+          </div>
+        )}
       </div>
 
       <div className={compact ? 'eve-quick' : 'eve-quick eve-quick-lg'}>
@@ -227,9 +376,28 @@ export function EveChatBody({
         <input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder="ถาม Eve อะไรก็ได้..."
+          placeholder={listening ? 'ฟังอยู่...' : 'ถาม Eve อะไรก็ได้...'}
           autoComplete="off"
+          disabled={listening && !draft}
         />
+        {micEnabledInSettings && micSupported && (
+          <button
+            type="button"
+            onClick={toggleMic}
+            title={listening ? 'หยุดฟัง' : 'พูดกับ Eve'}
+            className={cn(
+              'eve-mic-btn',
+              listening && 'eve-mic-btn-active',
+            )}
+            aria-pressed={listening}
+          >
+            {/* Inline mic icon — outlined when idle, filled+pulsing when active */}
+            <svg width={compact ? 13 : 16} height={compact ? 13 : 16} viewBox="0 0 24 24" fill={listening ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={2}>
+              <rect x="9" y="2" width="6" height="12" rx="3" />
+              <path d="M5 11a7 7 0 0 0 14 0M12 18v3" strokeLinecap="round" />
+            </svg>
+          </button>
+        )}
         <button type="submit" title="ส่ง">
           <svg width={compact ? 13 : 16} height={compact ? 13 : 16} viewBox="0 0 24 24" fill="currentColor">
             <path d="M3 11L22 2l-9 20-2-9-8-2z" />
