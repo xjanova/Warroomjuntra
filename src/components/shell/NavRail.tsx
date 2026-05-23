@@ -104,6 +104,30 @@ const STATIC_ITEMS: NavItem[] = [
     ),
   },
   {
+    key: 'workers',
+    href: '/workers',
+    label: 'DM-W',
+    icon: (
+      <>
+        <path d="M21 11.5a8.38 8.38 0 0 1-9 8.38 8.5 8.5 0 0 1-3.8-.9L3 21l1.9-5.2A8.38 8.38 0 0 1 21 11.5z" />
+        <circle cx="8.5" cy="11.5" r="1" />
+        <circle cx="12" cy="11.5" r="1" />
+        <circle cx="15.5" cy="11.5" r="1" />
+      </>
+    ),
+  },
+  {
+    key: 'usage',
+    href: '/usage',
+    label: 'API',
+    icon: (
+      <>
+        <polyline points="3 17 9 11 13 15 21 6" />
+        <polyline points="14 6 21 6 21 13" />
+      </>
+    ),
+  },
+  {
     key: 'customers',
     href: '/customers',
     label: 'ลูกค้า',
