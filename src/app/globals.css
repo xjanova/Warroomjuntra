@@ -543,12 +543,15 @@ table.dense tbody tr.selected { background: rgba(34,211,238,.08); }
   will-change: transform;
 }
 
-/* HEAD + HAIR — top ~32% of the figure.
-   Bobs up/down + slight tilt. The face HTML overlay rides this same motion
-   via .eve-face below so eyes/mouth stay glued to the head. */
+/* HEAD + HAIR — top of the figure down through the chin.
+   Boundary must sit BELOW the face so the eyes (y=26%) and mouth (y=31%)
+   stay 100% on the head layer — never inside another layer's animation.
+   Previous mask faded 26→33% which put the mouth inside the feather zone
+   and the torso layer's breath-animated copy bled through, creating a
+   visible "ghost" jitter at the eyes. New boundary is at the neck (42→48%). */
 .eve-layer-head {
-  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 26%, transparent 33%);
-          mask-image: linear-gradient(to bottom, #000 0%, #000 26%, transparent 33%);
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 42%, transparent 48%);
+          mask-image: linear-gradient(to bottom, #000 0%, #000 42%, transparent 48%);
   -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
   -webkit-mask-size: 100% 100%;   mask-size: 100% 100%;
   transform-origin: 50% 32%;
@@ -559,29 +562,30 @@ table.dense tbody tr.selected { background: rgba(34,211,238,.08); }
   50%      { transform: translateY(-2px) rotate(.6deg); }
 }
 
-/* TORSO — middle band, 22-62%. This is the "breath" region.
-   Slightly different timing than the head so they don't lock-step. */
+/* TORSO — neck-down through ribcage. Starts AFTER the face so the breath
+   animation never reaches eyes/mouth. Slightly different timing than the
+   head so they don't lock-step. */
 .eve-layer-torso {
-  -webkit-mask-image: linear-gradient(to bottom, transparent 22%, #000 28%, #000 55%, transparent 62%);
-          mask-image: linear-gradient(to bottom, transparent 22%, #000 28%, #000 55%, transparent 62%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 45%, #000 50%, #000 78%, transparent 85%);
+          mask-image: linear-gradient(to bottom, transparent 45%, #000 50%, #000 78%, transparent 85%);
   -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
   -webkit-mask-size: 100% 100%;   mask-size: 100% 100%;
-  transform-origin: 50% 58%;
+  transform-origin: 50% 60%;
   animation: eve-torso-breath 3.6s ease-in-out infinite;
 }
 @keyframes eve-torso-breath {
   0%, 100% { transform: scaleY(1) translateY(0); }
-  50%      { transform: scaleY(1.022) translateY(-1.5px); }
+  50%      { transform: scaleY(1.018) translateY(-1px); }
 }
 
-/* LOWER — dress/skirt region, 52-100%.
-   Slow sway from the waist pivot to suggest a draped garment. */
+/* LOWER — dress/skirt from hip down. Starts after the ribcage so its
+   sway never reaches the torso breath region. */
 .eve-layer-lower {
-  -webkit-mask-image: linear-gradient(to bottom, transparent 52%, #000 60%, #000 100%);
-          mask-image: linear-gradient(to bottom, transparent 52%, #000 60%, #000 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 82%, #000 88%, #000 100%);
+          mask-image: linear-gradient(to bottom, transparent 82%, #000 88%, #000 100%);
   -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
   -webkit-mask-size: 100% 100%;   mask-size: 100% 100%;
-  transform-origin: 50% 55%;
+  transform-origin: 50% 82%;
   animation: eve-lower-sway 7.2s ease-in-out infinite;
 }
 @keyframes eve-lower-sway {
