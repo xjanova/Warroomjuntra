@@ -48,3 +48,5 @@ Thumbs.db
 
 # original zip (large binary)
 *.zip
+.warroom-token.local
+.claude-letters/

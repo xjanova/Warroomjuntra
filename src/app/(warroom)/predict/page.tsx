@@ -104,7 +104,15 @@ export default function PredictPage() {
         <DataSourceBadge source={isPaired ? 'live' : 'mock'} />
         <div className="flex-1" />
         <button
-          onClick={() => pushToast({ kind: 'mystic', title: 'บันทึก preset แล้ว', body: selectedTemplate.name })}
+          onClick={() => {
+            const presets = JSON.parse(localStorage.getItem('warroom.predict.presets') || '[]') as Array<{
+              id: string; name: string; prompt: string; providers: Record<string, boolean>; savedAt: string;
+            }>;
+            const id = 'p-' + Date.now();
+            presets.unshift({ id, name: selectedTemplate.name, prompt, providers: active, savedAt: new Date().toISOString() });
+            localStorage.setItem('warroom.predict.presets', JSON.stringify(presets.slice(0, 50)));
+            pushToast({ kind: 'mystic', title: 'บันทึก preset แล้ว', body: selectedTemplate.name + ' · #' + id.slice(-4) });
+          }}
           className="btn"
         >
           💾 บันทึก preset
@@ -192,7 +200,18 @@ export default function PredictPage() {
             <div className="flex-1" />
             {Object.keys(results).length > 0 && (
               <button
-                onClick={() => pushToast({ kind: 'ok', title: 'คัดลอกแล้ว' })}
+                onClick={() => {
+                  const text = Object.entries(results)
+                    .map(([id, r]) => {
+                      const p = PROVIDERS.find((x) => x.id === id);
+                      return `=== ${p?.label ?? id} (${p?.model ?? ''}, ${r.latencyMs}ms) ===\n${r.text}\n`;
+                    })
+                    .join('\n---\n\n');
+                  void navigator.clipboard.writeText(text).then(
+                    () => pushToast({ kind: 'ok', title: 'คัดลอกแล้ว', body: `${Object.keys(results).length} providers` }),
+                    () => pushToast({ kind: 'crit', title: 'คัดลอกล้มเหลว' }),
+                  );
+                }}
                 className="btn"
               >
                 📋 คัดลอกทั้งหมด

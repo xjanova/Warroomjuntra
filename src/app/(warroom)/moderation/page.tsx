@@ -114,24 +114,71 @@ export default function ModerationPage() {
 
   const isLive = suspectsFeed.source === 'live';
 
+  // Map a UI label → ban duration. Returns ISO string for `banned_until` or
+  // null for permanent. Returns 'warn-only' when no ban should happen.
+  const durationFor = (label: string): string | null | 'warn-only' | 'unban' => {
+    if (label.includes('ปล่อย')) return 'unban';
+    if (label.includes('เตือน')) return 'warn-only';
+    if (label.includes('1 ชม')) return new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    if (label.includes('24 ชม')) return new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    if (label.includes('ถาวร')) return null;
+    if (label.includes('เฝ้าระวัง')) return 'warn-only';
+    return null;
+  };
+
   const act = async (label: string) => {
     if (!active) return;
-    pushToast({ kind: 'crit', title: label, body: active.name });
+    const dur = durationFor(label);
 
-    if (isLive && label.includes('แบน')) {
+    if (!isLive) {
+      pushToast({ kind: dur === 'unban' ? 'ok' : 'crit', title: label + ' (mock)', body: active.name });
+      return;
+    }
+
+    if (dur === 'warn-only') {
+      // No backend "warn" endpoint — record a local audit entry so the
+      // operator still has a paper trail. Soft action; user stays unbanned.
+      const audit = JSON.parse(localStorage.getItem('warroom.moderation.audit') || '[]') as Array<{
+        ts: string; action: string; psid: string; name: string;
+      }>;
+      audit.unshift({ ts: new Date().toISOString(), action: label, psid: active.psid, name: active.name });
+      localStorage.setItem('warroom.moderation.audit', JSON.stringify(audit.slice(0, 200)));
+      pushToast({ kind: 'warn', title: '⚠ ' + label, body: active.name });
+      return;
+    }
+
+    if (dur === 'unban') {
+      // Look up the ban row by psid in the current banned feed.
+      const match = liveBanned.find((b) => b.psid === active.psid);
+      if (!match) {
+        pushToast({ kind: 'warn', title: 'ไม่พบบันทึกแบน', body: active.name + ' อาจไม่ถูกแบนอยู่แล้ว' });
+        return;
+      }
       try {
-        await banUser({
-          platform: active.channel === 'LINE' ? 'line' : 'facebook',
-          platform_user_id: active.psid,
-          display_name: active.name,
-          reason: active.reasons.join(', '),
-        });
-        pushToast({ kind: 'ok', title: 'แบนผู้ใช้สำเร็จ', body: active.name });
+        await unbanUser(Number(match.id));
+        pushToast({ kind: 'ok', title: '✓ ปล่อย ' + active.name, body: 'Ban #' + match.id });
         bannedFeed.refetch?.();
         suspectsFeed.refetch?.();
       } catch (e) {
-        pushToast({ kind: 'crit', title: 'แบนไม่สำเร็จ', body: String((e as Error).message) });
+        pushToast({ kind: 'crit', title: 'ปลดแบนไม่สำเร็จ', body: String((e as Error).message) });
       }
+      return;
+    }
+
+    // Otherwise: real ban with duration `dur` (null = permanent, ISO = until time)
+    try {
+      await banUser({
+        platform: active.channel === 'LINE' ? 'line' : 'facebook',
+        platform_user_id: active.psid,
+        display_name: active.name,
+        reason: label + ' · ' + active.reasons.join(', '),
+        banned_until: dur,
+      });
+      pushToast({ kind: 'crit', title: '🚫 ' + label, body: active.name });
+      bannedFeed.refetch?.();
+      suspectsFeed.refetch?.();
+    } catch (e) {
+      pushToast({ kind: 'crit', title: 'แบนไม่สำเร็จ', body: String((e as Error).message) });
     }
   };
 
@@ -260,9 +307,9 @@ export default function ModerationPage() {
                     </td>
                     <td className="mono text-2xs text-mute">{s.lastActive}</td>
                     <td onClick={(e) => e.stopPropagation()} className="text-right space-x-1">
-                      <button onClick={() => pushToast({ kind: 'warn', title: 'เตือนแล้ว', body: s.name })} className="btn btn-warn">⚠ เตือน</button>
-                      <button className="btn">🔇 เงียบ 1ชม.</button>
-                      <button onClick={() => pushToast({ kind: 'crit', title: 'แบนแล้ว', body: s.name })} className="btn btn-crit">🚫 แบน</button>
+                      <button onClick={() => { setActive(s); setTimeout(() => act('ส่งคำเตือน'), 0); }} className="btn btn-warn">⚠ เตือน</button>
+                      <button onClick={() => { setActive(s); setTimeout(() => act('เงียบ 1 ชม.'), 0); }} className="btn">🔇 เงียบ 1ชม.</button>
+                      <button onClick={() => { setActive(s); setTimeout(() => act('แบน 24 ชม.'), 0); }} className="btn btn-crit">🚫 แบน</button>
                     </td>
                   </tr>
                 ))}

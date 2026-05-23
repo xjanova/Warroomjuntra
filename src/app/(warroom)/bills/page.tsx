@@ -5,7 +5,8 @@ import { BILLS, billStatusLabel, billStatusTone, type Bill } from '@/lib/mock/bi
 import { ChannelChip, Pill } from '@/components/ui/Pill';
 import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { useWarroom } from '@/lib/stores/warroom';
-import { useFortuneFeed } from '@/lib/api';
+import { useFortuneFeed, markReadingPaid, refundReading, cancelReading, describeError } from '@/lib/api';
+import { useSettings, isPaired as isPairedFn } from '@/lib/stores/settings';
 import { readingToBill } from '@/lib/adapters/bills';
 
 const TONE_COLOR: Record<string, string> = {
@@ -55,6 +56,59 @@ export default function BillsPage() {
     if (!active && bills.length) setActive(bills[0]);
   }, [bills, active]);
   const pushToast = useWarroom((s) => s.pushToast);
+  const paired = useSettings((s) => isPairedFn(s));
+
+  // Extract numeric reading id from "r-{id}" wrapper. Mock bills have "B-..." prefix.
+  const readingIdFromBillId = (billId: string): number | null => {
+    const m = /^r-(\d+)$/.exec(billId);
+    return m ? Number(m[1]) : null;
+  };
+
+  const doMarkPaid = async (b: Bill) => {
+    const rid = readingIdFromBillId(b.id);
+    if (!paired || !rid) {
+      pushToast({ kind: 'ok', title: 'มาร์คจ่ายแล้ว (mock)', body: b.id });
+      return;
+    }
+    try {
+      await markReadingPaid(rid, { amount: b.amount });
+      pushToast({ kind: 'ok', title: '✓ มาร์คจ่าย', body: b.id + ' · ฿' + b.amount.toLocaleString() });
+      feed.refetch?.();
+    } catch (e) {
+      pushToast({ kind: 'crit', title: 'มาร์คจ่ายล้มเหลว', body: describeError(e) });
+    }
+  };
+
+  const doRefund = async (b: Bill, reason?: string) => {
+    const rid = readingIdFromBillId(b.id);
+    if (!paired || !rid) {
+      pushToast({ kind: 'crit', title: 'ส่งเข้าคิวคืนเงิน (mock)', body: b.id });
+      return;
+    }
+    try {
+      await refundReading(rid, reason ?? 'admin_refund_from_warroom');
+      pushToast({ kind: 'crit', title: '↺ คืนเงิน ' + b.id, body: 'ส่งเข้าคิวคืนเงินแล้ว' });
+      feed.refetch?.();
+    } catch (e) {
+      pushToast({ kind: 'crit', title: 'คืนเงินล้มเหลว', body: describeError(e) });
+    }
+  };
+
+  const doCancel = async (b: Bill) => {
+    const rid = readingIdFromBillId(b.id);
+    if (!confirm(`ยกเลิกบิล ${b.id} (${b.customer} · ฿${b.amount.toLocaleString()}) ?`)) return;
+    if (!paired || !rid) {
+      pushToast({ kind: 'crit', title: 'ยกเลิกบิล (mock)', body: b.id });
+      return;
+    }
+    try {
+      await cancelReading(rid, 'admin_cancel_from_warroom');
+      pushToast({ kind: 'crit', title: '✕ ยกเลิก ' + b.id });
+      feed.refetch?.();
+    } catch (e) {
+      pushToast({ kind: 'crit', title: 'ยกเลิกล้มเหลว', body: describeError(e) });
+    }
+  };
 
   const filtered = useMemo(
     () =>
@@ -163,16 +217,16 @@ export default function BillsPage() {
                   <td className="mono text-2xs text-mute">{b.when}</td>
                   <td onClick={(e) => e.stopPropagation()} className="text-right space-x-1">
                     {(b.status === 'open' || b.status === 'floating') && (
-                      <button className="btn btn-ok" onClick={() => pushToast({ kind: 'ok', title: 'มาร์คจ่ายแล้ว', body: b.id })}>
+                      <button className="btn btn-ok" onClick={() => void doMarkPaid(b)}>
                         มาร์คจ่าย
                       </button>
                     )}
                     {b.status === 'paid' && (
-                      <button className="btn" onClick={() => pushToast({ kind: 'crit', title: 'ส่งเข้าคิวคืนเงิน', body: b.id })} style={{ borderColor: 'rgba(244,63,94,.4)', color: '#fda4af' }}>
+                      <button className="btn" onClick={() => void doRefund(b)} style={{ borderColor: 'rgba(244,63,94,.4)', color: '#fda4af' }}>
                         คืนเงิน
                       </button>
                     )}
-                    <button className="btn">เปิด</button>
+                    <button className="btn" onClick={() => setActive(b)}>เปิด</button>
                   </td>
                 </tr>
               ))}
@@ -217,10 +271,48 @@ export default function BillsPage() {
                 <div className="text-2xs text-center text-mute mt-1 mono">PromptPay · {active.id}</div>
               </div>
               <div className="grid grid-cols-2 gap-2">
-                <button className="btn btn-ok justify-center py-2">✓ มาร์คว่าจ่ายแล้ว</button>
-                <button className="btn justify-center py-2">📨 ส่ง QR อีกครั้ง</button>
-                <button className="btn btn-warn justify-center py-2">✎ แก้ยอด</button>
-                <button className="btn btn-crit justify-center py-2">✕ ยกเลิกบิล</button>
+                <button
+                  className="btn btn-ok justify-center py-2"
+                  onClick={() => void doMarkPaid(active)}
+                  disabled={active.status === 'paid' || active.status === 'refunded' || active.status === 'cancelled'}
+                >
+                  ✓ มาร์คว่าจ่ายแล้ว
+                </button>
+                <button
+                  className="btn justify-center py-2"
+                  onClick={() => {
+                    const url = `https://main.thaiprompt.online/admin/fortune/readings/${(active.id.startsWith('r-') ? active.id.slice(2) : active.id)}`;
+                    window.open(url, '_blank', 'noopener');
+                  }}
+                >
+                  📨 เปิดในแอดมินเว็บ
+                </button>
+                <button
+                  className="btn btn-warn justify-center py-2"
+                  onClick={() => {
+                    const next = window.prompt('ยอดใหม่ (THB)', String(active.amount));
+                    const n = next !== null ? Number(next) : NaN;
+                    if (!Number.isFinite(n) || n <= 0) return;
+                    // Mark-paid endpoint accepts amount override — use that as a stand-in
+                    // for "edit amount + mark paid" (the only operator-facing edit we need today).
+                    const rid = readingIdFromBillId(active.id);
+                    if (!paired || !rid) {
+                      pushToast({ kind: 'warn', title: 'แก้ยอด (mock)', body: `${active.id} → ฿${n.toLocaleString()}` });
+                      return;
+                    }
+                    markReadingPaid(rid, { amount: n, note: 'edit_amount_from_warroom' })
+                      .then(() => {
+                        pushToast({ kind: 'warn', title: '✎ แก้ยอด ' + active.id, body: '฿' + n.toLocaleString() });
+                        feed.refetch?.();
+                      })
+                      .catch((e) => pushToast({ kind: 'crit', title: 'แก้ยอดล้มเหลว', body: describeError(e) }));
+                  }}
+                >
+                  ✎ แก้ยอด
+                </button>
+                <button className="btn btn-crit justify-center py-2" onClick={() => void doCancel(active)}>
+                  ✕ ยกเลิกบิล
+                </button>
               </div>
             </div>
           </aside>

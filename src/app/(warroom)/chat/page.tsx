@@ -7,7 +7,8 @@ import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { Switch } from '@/components/ui/Switch';
 import { Kbd } from '@/components/ui/Kbd';
 import { useWarroom } from '@/lib/stores/warroom';
-import { useFortuneFeed } from '@/lib/api';
+import { useFortuneFeed, sendChatMessage, suggestChatReply, describeError } from '@/lib/api';
+import { useSettings, isPaired as isPairedFn } from '@/lib/stores/settings';
 import { readingToChatThread } from '@/lib/adapters/chat';
 import { cn } from '@/lib/utils';
 
@@ -39,7 +40,16 @@ export default function ChatPage() {
 
   const [draft, setDraft] = useState('');
   const [aiSuggest, setAiSuggest] = useState('');
+  const [sending, setSending] = useState(false);
+  const [suggesting, setSuggesting] = useState(false);
   const pushToast = useWarroom((s) => s.pushToast);
+  const paired = useSettings((s) => isPairedFn(s));
+
+  // Active chat thread → reading id (live threads have id like "r-{id}").
+  const readingIdOf = (threadId: string): number | null => {
+    const m = /^r-(\d+)$/.exec(threadId);
+    return m ? Number(m[1]) : null;
+  };
 
   const filtered = useMemo(
     () =>
@@ -54,11 +64,62 @@ export default function ChatPage() {
 
   const active = threads.find((c) => c.id === activeId);
 
-  const sendDraft = () => {
+  const sendDraft = async () => {
     const v = draft.trim();
-    if (!v) return;
-    pushToast({ kind: 'ok', title: 'ส่งข้อความแล้ว', body: v.slice(0, 60) });
-    setDraft('');
+    if (!v || sending) return;
+    if (!active) return;
+
+    const rid = readingIdOf(active.id);
+    if (!paired || !rid) {
+      pushToast({ kind: 'ok', title: 'ส่งข้อความแล้ว (mock)', body: v.slice(0, 60) });
+      setDraft('');
+      return;
+    }
+
+    setSending(true);
+    try {
+      const res = await sendChatMessage({ reading_id: rid, text: v });
+      if (res.delivered) {
+        pushToast({ kind: 'ok', title: '✓ ส่งแล้ว → ' + active.name, body: v.slice(0, 60) });
+        setDraft('');
+        feed.refetch?.();
+      } else {
+        pushToast({ kind: 'warn', title: 'ส่งไม่ผ่าน platform', body: 'FB/LINE ปฏิเสธ — ลองอีกครั้ง' });
+      }
+    } catch (e) {
+      pushToast({ kind: 'crit', title: 'ส่งข้อความล้มเหลว', body: describeError(e) });
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const requestAiSuggestion = async () => {
+    if (!active || suggesting) return;
+    const rid = readingIdOf(active.id);
+    const recentText = active.messages?.slice(-3).map((m) => `[${m.by}] ${m.text}`).join('\n') ?? '';
+
+    if (!paired || !rid) {
+      // Local mock suggestion (no API call).
+      setAiSuggest(
+        'คุณ' + active.name + ' คะ ทางทีมงานเช็คยอดเงินอยู่แล้ว ขออภัยในความล่าช้านะคะ',
+      );
+      return;
+    }
+
+    setSuggesting(true);
+    setAiSuggest('');
+    try {
+      const res = await suggestChatReply({
+        reading_id: rid,
+        context_text: recentText || 'ลูกค้าทักมาขอตรวจสอบสถานะการชำระเงิน',
+        customer_name: active.name,
+      });
+      setAiSuggest(res.suggestion);
+    } catch (e) {
+      pushToast({ kind: 'crit', title: 'AI แนะนำล้มเหลว', body: describeError(e) });
+    } finally {
+      setSuggesting(false);
+    }
   };
 
   return (
@@ -271,23 +332,18 @@ export default function ChatPage() {
                 />
                 <div className="flex flex-col gap-1">
                   <button
-                    onClick={sendDraft}
-                    disabled={!draft.trim()}
+                    onClick={() => void sendDraft()}
+                    disabled={!draft.trim() || sending}
                     className="btn btn-primary px-3 disabled:opacity-40"
                   >
-                    ส่ง <Kbd>⌘↵</Kbd>
+                    {sending ? 'กำลังส่ง...' : <>ส่ง <Kbd>⌘↵</Kbd></>}
                   </button>
                   <button
-                    onClick={() =>
-                      setAiSuggest(
-                        'คุณ' +
-                          active.name +
-                          ' คะ ทางทีมงานเช็คยอดเงินอยู่แล้ว ขออภัยอย่างยิ่งในความล่าช้า ขอเลขท้ายบัตรประชาชน 4 ตัวเพื่อยืนยันค่ะ',
-                      )
-                    }
-                    className="btn btn-mystic px-3"
+                    onClick={() => void requestAiSuggestion()}
+                    disabled={suggesting}
+                    className="btn btn-mystic px-3 disabled:opacity-40"
                   >
-                    AI แนะนำ
+                    {suggesting ? '⏳ คิด...' : 'AI แนะนำ'}
                   </button>
                 </div>
               </div>

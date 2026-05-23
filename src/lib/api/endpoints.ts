@@ -144,6 +144,30 @@ export async function fetchFortuneReading(id: string | number) {
   return apiRequest<FortuneReading>({ path: `/fortune/readings/${id}` });
 }
 
+export async function markReadingPaid(id: string | number, payload?: { amount?: number; note?: string }) {
+  return apiRequest<unknown>({
+    method: 'POST',
+    path: `/fortune/readings/${id}/mark-paid`,
+    body: payload ?? {},
+  });
+}
+
+export async function refundReading(id: string | number, reason?: string) {
+  return apiRequest<unknown>({
+    method: 'POST',
+    path: `/fortune/readings/${id}/refund`,
+    body: reason ? { reason } : {},
+  });
+}
+
+export async function cancelReading(id: string | number, reason?: string) {
+  return apiRequest<unknown>({
+    method: 'POST',
+    path: `/fortune/readings/${id}/cancel`,
+    body: reason ? { reason } : {},
+  });
+}
+
 // ---- Finance: Wallets / Withdrawals (Payment recon + Approvals) ------------
 // IMPORTANT: routes are mounted under /finance/* (not /wallets/* or /withdrawals/*)
 // despite the controller namespace being Finance\WalletController. Match the
@@ -327,6 +351,38 @@ export async function fetchRanks() {
     min_volume?: number;
     [k: string]: unknown;
   }>>({ path: '/ranks' });
+}
+
+// ---- Admin chat takeover (Warroom /chat compose) --------------------------
+
+export async function sendChatMessage(payload: {
+  reading_id?: number;
+  platform?: 'facebook' | 'line';
+  platform_user_id?: string;
+  text: string;
+}) {
+  return apiRequest<{
+    platform: 'facebook' | 'line';
+    platform_user_id: string;
+    delivered: boolean;
+    at: string;
+  }>({
+    method: 'POST',
+    path: '/chat/send',
+    body: payload,
+  });
+}
+
+export async function suggestChatReply(payload: {
+  reading_id?: number;
+  context_text: string;
+  customer_name?: string;
+}) {
+  return apiRequest<{ suggestion: string; customer_name: string }>({
+    method: 'POST',
+    path: '/chat/suggest',
+    body: payload,
+  });
 }
 
 // ---- User detail extras (Customer 360 drawer) -----------------------------

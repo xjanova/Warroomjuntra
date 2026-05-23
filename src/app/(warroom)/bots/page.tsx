@@ -6,7 +6,7 @@ import { Switch } from '@/components/ui/Switch';
 import { Pill } from '@/components/ui/Pill';
 import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { useWarroom } from '@/lib/stores/warroom';
-import { useAdminData, fetchAiBots, toggleAiBot, describeError } from '@/lib/api';
+import { useAdminData, fetchAiBots, toggleAiBot, testAiBot, describeError } from '@/lib/api';
 import { aiBotToBotCardFull } from '@/lib/adapters/bots-page';
 
 export default function BotsPage() {
@@ -140,11 +140,52 @@ export default function BotsPage() {
               </svg>
             </div>
             <div className="px-3 pb-3 flex gap-1">
-              <button className="btn flex-1 justify-center" onClick={() => pushToast({ kind: 'info', title: 'รันบอท', body: b.name })}>
+              <button
+                className="btn flex-1 justify-center"
+                onClick={async () => {
+                  if (live.source !== 'live') {
+                    pushToast({ kind: 'info', title: 'รันบอท (mock)', body: b.name });
+                    return;
+                  }
+                  pushToast({ kind: 'info', title: 'รัน ' + b.name, body: 'กำลังทดสอบ...' });
+                  try {
+                    const res = await testAiBot(b.id);
+                    if (res.ok) {
+                      pushToast({
+                        kind: 'ok',
+                        title: '✓ บอทตอบกลับ ' + (res.latency_ms ?? '?') + 'ms',
+                        body: (res.output ?? '').slice(0, 120),
+                      });
+                    } else {
+                      pushToast({ kind: 'crit', title: '✗ บอทล้มเหลว', body: res.error ?? 'ไม่ทราบสาเหตุ' });
+                    }
+                  } catch (e) {
+                    pushToast({ kind: 'crit', title: 'รันบอทล้มเหลว', body: describeError(e) });
+                  }
+                }}
+              >
                 ▶ รันเลย
               </button>
-              <button className="btn flex-1 justify-center">📜 log</button>
-              <button className="btn flex-1 justify-center">⚙ แก้</button>
+              <button
+                className="btn flex-1 justify-center"
+                onClick={() => {
+                  // /admin/ai/bots/{id} จะ trigger admin web log page เปิดใน tab ใหม่
+                  const baseUrl = new URL(((document.querySelector('a[href="/"]') as HTMLAnchorElement)?.href) || location.origin);
+                  // Open thaiprompt admin web log viewer for this bot (no separate endpoint —
+                  // ai_bots log lives in the existing admin web UI under /admin/ai/bots/{id})
+                  window.open('https://main.thaiprompt.online/admin/ai/bots/' + b.id, '_blank', 'noopener');
+                }}
+              >
+                📜 log
+              </button>
+              <button
+                className="btn flex-1 justify-center"
+                onClick={() => {
+                  window.open('https://main.thaiprompt.online/admin/ai/bots/' + b.id + '/edit', '_blank', 'noopener');
+                }}
+              >
+                ⚙ แก้
+              </button>
             </div>
           </div>
         ))}
