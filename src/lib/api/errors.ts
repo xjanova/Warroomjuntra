@@ -28,6 +28,12 @@ export class ApiError extends Error {
 
 export function describeError(e: unknown): string {
   if (e instanceof ApiError) {
+    // Prefer the server's Thai message when present — it's more specific
+    // than our generic per-kind label (e.g. "อีเมลหรือรหัสผ่านไม่ถูกต้อง"
+    // for a 401 bad-credentials response vs the generic "Token หมดอายุ").
+    const serverMsg = extractServerMessage(e.body);
+    if (serverMsg) return serverMsg;
+
     switch (e.kind) {
       case 'network':
         return 'เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ (network / CORS / DNS)';
@@ -55,4 +61,16 @@ export function describeError(e: unknown): string {
   }
   if (e instanceof Error) return e.message;
   return String(e);
+}
+
+/**
+ * Pull a human-readable message out of a server error body, if present.
+ * Thaiprompt admin API returns `{success: false, message, errors}` envelope —
+ * we want to show `message` (Thai) to the user instead of our generic label.
+ */
+function extractServerMessage(body: unknown): string | null {
+  if (!body || typeof body !== 'object') return null;
+  const b = body as Record<string, unknown>;
+  if (typeof b.message === 'string' && b.message.trim()) return b.message.trim();
+  return null;
 }
