@@ -262,11 +262,60 @@ export default function PredictPage() {
                 </div>
                 {results[p.id] && (
                   <div className="px-3 py-2 border-t border-line flex items-center gap-1.5">
-                    <button className="btn btn-ok text-2xs">👍 ดี</button>
-                    <button className="btn btn-warn text-2xs">😐 พอใช้</button>
-                    <button className="btn btn-crit text-2xs">👎 ไม่ดี</button>
+                    {(['good', 'mid', 'bad'] as const).map((rating) => {
+                      const label = rating === 'good' ? '👍 ดี' : rating === 'mid' ? '😐 พอใช้' : '👎 ไม่ดี';
+                      const tone = rating === 'good' ? 'btn-ok' : rating === 'mid' ? 'btn-warn' : 'btn-crit';
+                      return (
+                        <button
+                          key={rating}
+                          className={`btn ${tone} text-2xs`}
+                          onClick={() => {
+                            // Record rating in localStorage — ratings inform which provider/template
+                            // pairs the operator prefers. No backend endpoint needed; aggregated stats
+                            // could be added later by reading from this stash.
+                            const log = JSON.parse(localStorage.getItem('warroom.predict.ratings') || '[]') as Array<{
+                              ts: string; provider: string; model: string | null; templateId: string; rating: string;
+                              latencyMs: number; promptPreview: string;
+                            }>;
+                            log.unshift({
+                              ts: new Date().toISOString(),
+                              provider: p.id,
+                              model: results[p.id].text ? p.model : null,
+                              templateId: selectedTemplate.id,
+                              rating,
+                              latencyMs: results[p.id].latencyMs,
+                              promptPreview: prompt.slice(0, 120),
+                            });
+                            localStorage.setItem('warroom.predict.ratings', JSON.stringify(log.slice(0, 500)));
+                            pushToast({ kind: rating === 'good' ? 'ok' : rating === 'mid' ? 'warn' : 'crit', title: label + ' ' + p.label });
+                          }}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
                     <div className="flex-1" />
-                    <button className="btn text-2xs">💾 บันทึก</button>
+                    <button
+                      className="btn text-2xs"
+                      onClick={() => {
+                        const r = results[p.id];
+                        if (!r) return;
+                        const saved = JSON.parse(localStorage.getItem('warroom.predict.saved-outputs') || '[]') as Array<{
+                          ts: string; provider: string; model: string | null; text: string; latencyMs: number;
+                        }>;
+                        saved.unshift({
+                          ts: new Date().toISOString(),
+                          provider: p.id,
+                          model: p.model,
+                          text: r.text,
+                          latencyMs: r.latencyMs,
+                        });
+                        localStorage.setItem('warroom.predict.saved-outputs', JSON.stringify(saved.slice(0, 200)));
+                        pushToast({ kind: 'mystic', title: '💾 บันทึก ' + p.label, body: 'เก็บไว้ใน warroom.predict.saved-outputs' });
+                      }}
+                    >
+                      💾 บันทึก
+                    </button>
                   </div>
                 )}
               </div>

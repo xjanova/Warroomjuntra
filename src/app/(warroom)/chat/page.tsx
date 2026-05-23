@@ -313,9 +313,40 @@ export default function ChatPage() {
             <div className="border-t border-line p-3 bg-panel2/60">
               <div className="flex items-end gap-2">
                 <div className="flex flex-col gap-1">
-                  <button className="btn btn-ghost h-7 w-7 justify-center" title="แนบรูป">📎</button>
-                  <button className="btn btn-ghost h-7 w-7 justify-center" title="ส่ง QR">▦</button>
-                  <button className="btn btn-ghost h-7 w-7 justify-center" title="ส่งเสียง">🎤</button>
+                  <button
+                    className="btn btn-ghost h-7 w-7 justify-center"
+                    title="แนบรูป (เปิดในแอดมินเว็บ)"
+                    onClick={() => {
+                      const rid = readingIdOf(active.id);
+                      if (rid) window.open('https://main.thaiprompt.online/admin/fortune/readings/' + rid, '_blank', 'noopener');
+                      else pushToast({ kind: 'info', title: '📎 แนบรูป', body: 'รองรับเฉพาะใน admin web' });
+                    }}
+                  >
+                    📎
+                  </button>
+                  <button
+                    className="btn btn-ghost h-7 w-7 justify-center"
+                    title="แทรก PromptPay QR text"
+                    onClick={() => {
+                      const amount = window.prompt('ยอดที่จะส่ง QR (THB)', String(active.due || 99));
+                      const n = amount ? Number(amount) : NaN;
+                      if (!Number.isFinite(n) || n <= 0) return;
+                      setDraft((d) => d + (d ? '\n' : '') + 'โอน ฿' + n.toLocaleString() + ' มาที่ PromptPay 0805782958 (ขอบคุณค่ะ ✨)');
+                    }}
+                  >
+                    ▦
+                  </button>
+                  <button
+                    className="btn btn-ghost h-7 w-7 justify-center"
+                    title="ข้อความเสียง — ใช้ admin web"
+                    onClick={() => {
+                      const rid = readingIdOf(active.id);
+                      if (rid) window.open('https://main.thaiprompt.online/admin/fortune/readings/' + rid + '?compose=voice', '_blank', 'noopener');
+                      else pushToast({ kind: 'info', title: '🎤 ข้อความเสียง', body: 'ใช้ผ่าน admin web' });
+                    }}
+                  >
+                    🎤
+                  </button>
                 </div>
                 <textarea
                   value={draft}
@@ -401,8 +432,28 @@ export default function ChatPage() {
               </div>
             </div>
             <div className="flex gap-1 mt-2">
-              <button className="btn btn-ok flex-1 justify-center">+ เครดิต</button>
-              <button className="btn flex-1 justify-center">รีเซ็ต</button>
+              <button
+                className="btn btn-ok flex-1 justify-center"
+                onClick={() => {
+                  // Credit adjustment lives in the admin wallet page; open with user filter.
+                  // active.userId may be null for FB-only threads — fall back to psid filter.
+                  const target = (active as { userId?: number; psid?: string }).userId ?? active.psid;
+                  window.open('https://main.thaiprompt.online/admin/wallets?user=' + target, '_blank', 'noopener');
+                }}
+              >
+                + เครดิต
+              </button>
+              <button
+                className="btn flex-1 justify-center"
+                onClick={() => {
+                  // "Reset" = clear the local draft + clear the AI suggestion.
+                  setDraft('');
+                  setAiSuggest('');
+                  pushToast({ kind: 'info', title: '↻ รีเซ็ต', body: 'ล้าง draft + AI แนะนำแล้ว' });
+                }}
+              >
+                รีเซ็ต
+              </button>
             </div>
           </div>
 

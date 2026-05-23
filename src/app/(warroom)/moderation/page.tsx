@@ -22,6 +22,9 @@ import {
   fetchModerationBanned,
   banUser,
   unbanUser,
+  fetchModerationRules,
+  updateModerationRules,
+  describeError,
 } from '@/lib/api';
 import {
   suspectFromServer,
@@ -113,6 +116,54 @@ export default function ModerationPage() {
   );
 
   const isLive = suspectsFeed.source === 'live';
+
+  // ── Auto-rules (Rules tab) — live read + write of moderation keywords ──
+  const [extraKeywords, setExtraKeywords] = useState<string[]>([]);
+  const [defaultKeywords, setDefaultKeywords] = useState<string[]>([]);
+  const [newKeyword, setNewKeyword] = useState('');
+  useEffect(() => {
+    if (!isLive || tab !== 'rules') return;
+    let cancelled = false;
+    fetchModerationRules()
+      .then((r) => {
+        if (cancelled) return;
+        setExtraKeywords(r.extra_keywords ?? []);
+        setDefaultKeywords(r.default_keywords ?? []);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [isLive, tab]);
+
+  const addKeyword = async () => {
+    const kw = newKeyword.trim();
+    if (!kw || extraKeywords.includes(kw)) return;
+    const next = [...extraKeywords, kw];
+    setExtraKeywords(next);
+    setNewKeyword('');
+    if (!isLive) return;
+    try {
+      await updateModerationRules(next);
+      pushToast({ kind: 'ok', title: '+ เพิ่มคำ', body: kw });
+    } catch (e) {
+      pushToast({ kind: 'crit', title: 'เพิ่มคำล้มเหลว', body: describeError(e) });
+      setExtraKeywords(extraKeywords); // revert
+    }
+  };
+
+  const removeKeyword = async (kw: string) => {
+    const next = extraKeywords.filter((k) => k !== kw);
+    setExtraKeywords(next);
+    if (!isLive) return;
+    try {
+      await updateModerationRules(next);
+      pushToast({ kind: 'warn', title: '× ลบคำ', body: kw });
+    } catch (e) {
+      pushToast({ kind: 'crit', title: 'ลบคำล้มเหลว', body: describeError(e) });
+      setExtraKeywords(extraKeywords); // revert
+    }
+  };
 
   // Map a UI label → ban duration. Returns ISO string for `banned_until` or
   // null for permanent. Returns 'warn-only' when no ban should happen.
@@ -248,7 +299,31 @@ export default function ModerationPage() {
               <option>FB</option>
               <option>LINE</option>
             </select>
-            <button className="btn">ส่งออก</button>
+            <button
+              className="btn"
+              onClick={() => {
+                const rows = filtered.map((s) => ({
+                  id: s.id, name: s.name, psid: s.psid, channel: s.channel,
+                  level: s.level, score: s.score, reasons: s.reasons.join(';'), lastActive: s.lastActive,
+                }));
+                const header = ['id', 'name', 'psid', 'channel', 'level', 'score', 'reasons', 'lastActive'];
+                const csv = [
+                  header.join(','),
+                  ...rows.map((r) => header.map((h) => JSON.stringify((r as Record<string, unknown>)[h] ?? '')).join(',')),
+                ].join('\n');
+                const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `warroom-moderation-suspects-${new Date().toISOString().slice(0, 10)}.csv`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+              }}
+            >
+              ส่งออก
+            </button>
           </>
         )}
       </div>
@@ -490,14 +565,39 @@ export default function ModerationPage() {
               </div>
               <div className="text-2xs text-mute mb-2">ตรวจจับคำในรายการต่อไปนี้ในข้อความลูกค้า (เพิ่มคะแนนภัยทุกครั้งที่เจอ)</div>
               <div className="flex flex-wrap gap-1 mb-2">
-                {SPAM_WORDS.map((w) => (
-                  <span key={w} className="pill pill-crit">
-                    {w}
-                    <button className="text-crit/60 hover:text-crit ml-1">×</button>
-                  </span>
-                ))}
+                {(isLive ? [...defaultKeywords, ...extraKeywords] : SPAM_WORDS).map((w) => {
+                  const isExtra = isLive && extraKeywords.includes(w);
+                  const isBuiltIn = isLive && defaultKeywords.includes(w);
+                  return (
+                    <span key={w} className="pill pill-crit" title={isBuiltIn ? 'built-in keyword (ลบไม่ได้)' : isExtra ? 'extra — กดลบได้' : ''}>
+                      {w}
+                      {isExtra ? (
+                        <button
+                          className="text-crit/60 hover:text-crit ml-1"
+                          onClick={() => void removeKeyword(w)}
+                          aria-label={`ลบ ${w}`}
+                        >
+                          ×
+                        </button>
+                      ) : null}
+                    </span>
+                  );
+                })}
               </div>
-              <input type="text" placeholder="+ เพิ่มคำใหม่..." className="text-xs px-2 py-1 w-full" />
+              <input
+                type="text"
+                placeholder={isLive ? '+ เพิ่มคำใหม่ (Enter)...' : '+ เพิ่มคำใหม่ (paired only)...'}
+                disabled={!isLive}
+                value={newKeyword}
+                onChange={(e) => setNewKeyword(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    void addKeyword();
+                  }
+                }}
+                className="text-xs px-2 py-1 w-full disabled:opacity-50"
+              />
             </div>
 
             <div className="panel p-3">

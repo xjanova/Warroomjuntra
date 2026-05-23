@@ -323,7 +323,18 @@ export default function ApprovalsPage() {
                 >
                   ✕ ปฏิเสธ
                 </button>
-                <button className="btn justify-center py-2 col-span-2">↪ ขอข้อมูลเพิ่ม</button>
+                <button
+                  className="btn justify-center py-2 col-span-2"
+                  onClick={() => {
+                    // Open the customer's wallet detail page in admin web — operator
+                    // can request additional info / message the customer from there.
+                    const target = (active as { user_id?: number; id?: string }).user_id
+                      ?? String(active.id ?? '').replace(/^w-/, '');
+                    window.open('https://main.thaiprompt.online/admin/wallets?user=' + target, '_blank', 'noopener');
+                  }}
+                >
+                  ↪ ขอข้อมูลเพิ่ม
+                </button>
               </div>
             </div>
           </aside>

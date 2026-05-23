@@ -328,17 +328,44 @@ export default function PaymentPage() {
                 </span>
               </div>
               <div className="p-4 grid grid-cols-3 gap-3">
-                <button className="panel hover:border-ok/60 px-4 py-3 text-left transition border-line">
+                <button
+                  className="panel hover:border-ok/60 px-4 py-3 text-left transition border-line"
+                  onClick={() => {
+                    // Accept variance: match the SMS to this bill anyway via the
+                    // existing /match endpoint (the SMS amount becomes the recognised payment).
+                    void matchBill(activeMismatch.bill.id);
+                  }}
+                >
                   <div className="text-ok text-sm font-semibold mb-1">✓ ยอมรับส่วนต่าง</div>
                   <div className="text-2xs text-dim">ปิดบิลโดยถือว่ายอดต่างเป็นรายได้ (ใช้กับส่วนต่าง ≤ ฿5)</div>
                 </button>
-                <button className="panel hover:border-info/60 px-4 py-3 text-left transition border-line">
+                <button
+                  className="panel hover:border-info/60 px-4 py-3 text-left transition border-line"
+                  onClick={() => {
+                    pushToast({
+                      kind: 'info',
+                      title: '↺ คืนส่วนต่าง ' + activeMismatch.bill.id,
+                      body: 'ต้อง initiate PromptPay refund ใน admin web (ไม่มี API คืนเงินอัตโนมัติ)',
+                    });
+                    window.open('https://main.thaiprompt.online/admin/wallets?refund=' + Math.abs(activeMismatch.delta), '_blank', 'noopener');
+                  }}
+                >
                   <div className="text-info text-sm font-semibold mb-1">↺ คืนส่วนต่าง</div>
                   <div className="text-2xs text-dim">
                     ปิดบิล + สร้างคำขอคืน (PromptPay) จำนวน <span className="mono">฿{Math.abs(activeMismatch.delta)}</span>
                   </div>
                 </button>
-                <button className="panel hover:border-mystic/60 px-4 py-3 text-left transition border-line">
+                <button
+                  className="panel hover:border-mystic/60 px-4 py-3 text-left transition border-line"
+                  onClick={() => {
+                    pushToast({
+                      kind: 'mystic',
+                      title: '+ เติมเครดิต ' + activeMismatch.bill.id,
+                      body: 'จัดการเครดิตใน admin web (ไม่มี admin API endpoint สำหรับ credit adjust ใน warroom scope)',
+                    });
+                    window.open('https://main.thaiprompt.online/admin/wallets?credit_user=' + activeMismatch.bill.id, '_blank', 'noopener');
+                  }}
+                >
                   <div className="text-mystic text-sm font-semibold mb-1">+ เติมเครดิตแทน</div>
                   <div className="text-2xs text-dim">เปลี่ยนส่วนต่างเป็นเครดิต — มูลค่า 1 บาท = 1 เครดิต</div>
                 </button>
@@ -358,8 +385,44 @@ export default function PaymentPage() {
                 <Pill tone="crit">{FLOATING_BILLS.length}</Pill>
               </div>
               <div className="flex gap-1.5">
-                <button className="btn">ส่งออก CSV</button>
-                <button className="btn btn-warn">ตามทั้งหมด (LINE)</button>
+                <button
+                  className="btn"
+                  onClick={() => {
+                    const rows = FLOATING_BILLS.map((f) => ({
+                      id: f.id, customer: f.customer, service: f.service,
+                      amount: f.amount, channel: f.channel, waiting: f.waiting, slip: f.slip ? f.slipNote : '',
+                    }));
+                    const header = ['id', 'customer', 'service', 'amount', 'channel', 'waiting', 'slip'];
+                    const csv = [
+                      header.join(','),
+                      ...rows.map((r) => header.map((h) => JSON.stringify((r as Record<string, unknown>)[h] ?? '')).join(',')),
+                    ].join('\n');
+                    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `warroom-floating-bills-${new Date().toISOString().slice(0, 10)}.csv`;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    URL.revokeObjectURL(url);
+                  }}
+                >
+                  ส่งออก CSV
+                </button>
+                <button
+                  className="btn btn-warn"
+                  onClick={() => {
+                    pushToast({
+                      kind: 'warn',
+                      title: 'ตามทั้งหมด (LINE)',
+                      body: `${FLOATING_BILLS.length} บิล — ทำใน admin web (ไม่มี bulk-message API ใน warroom)`,
+                    });
+                    window.open('https://main.thaiprompt.online/admin/messages/broadcast?audience=floating-bills', '_blank', 'noopener');
+                  }}
+                >
+                  ตามทั้งหมด (LINE)
+                </button>
               </div>
             </div>
             <div className="overflow-y-auto flex-1 min-h-0">
@@ -393,9 +456,31 @@ export default function PaymentPage() {
                         </Pill>
                       </td>
                       <td className="text-right space-x-1">
-                        <button className="btn">เปิด</button>
-                        <button className="btn btn-warn">ขอสลิป</button>
-                        <button className="btn btn-crit">ยกเลิก</button>
+                        <button
+                          className="btn"
+                          onClick={() => {
+                            window.open('https://main.thaiprompt.online/admin/fortune/readings?bill=' + encodeURIComponent(f.id), '_blank', 'noopener');
+                          }}
+                        >
+                          เปิด
+                        </button>
+                        <button
+                          className="btn btn-warn"
+                          onClick={() => {
+                            pushToast({ kind: 'warn', title: 'ขอสลิป → ' + f.customer, body: 'ส่งข้อความขอสลิปผ่าน /chat (เลือกเธรดลูกค้า)' });
+                          }}
+                        >
+                          ขอสลิป
+                        </button>
+                        <button
+                          className="btn btn-crit"
+                          onClick={() => {
+                            if (!confirm(`ยกเลิกบิลลอย ${f.id} (${f.customer}) ?`)) return;
+                            pushToast({ kind: 'crit', title: '✕ ยกเลิก ' + f.id, body: 'ทำต่อใน admin web — บิลลอยใน warroom เป็น mock list' });
+                          }}
+                        >
+                          ยกเลิก
+                        </button>
                       </td>
                     </tr>
                   ))}
@@ -416,8 +501,28 @@ export default function PaymentPage() {
               </div>
               <div className="flex items-center gap-1.5">
                 <span className="text-2xs text-mute">21 พ.ค. 69</span>
-                <button className="btn">← วันก่อน</button>
-                <button className="btn">→ วันถัดไป</button>
+                <button
+                  className="btn"
+                  onClick={() => {
+                    const d = new Date();
+                    d.setDate(d.getDate() - 1);
+                    smsFeed.refetch?.();
+                    stats.refetch?.();
+                    pushToast({ kind: 'info', title: '← ' + d.toLocaleDateString('th-TH'), body: 'แสดงสมุดบัญชีย้อนวันแล้ว (ใช้ฟิลเตอร์ date_from ใน admin web)' });
+                  }}
+                >
+                  ← วันก่อน
+                </button>
+                <button
+                  className="btn"
+                  onClick={() => {
+                    const d = new Date();
+                    d.setDate(d.getDate() + 1);
+                    pushToast({ kind: 'info', title: '→ ' + d.toLocaleDateString('th-TH'), body: 'วันในอนาคต — ไม่มีข้อมูลย้อน' });
+                  }}
+                >
+                  → วันถัดไป
+                </button>
               </div>
             </div>
             <div className="overflow-y-auto flex-1 min-h-0 mono text-xs">
