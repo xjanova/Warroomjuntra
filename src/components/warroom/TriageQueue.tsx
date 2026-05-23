@@ -105,33 +105,13 @@ export function TriageQueue() {
       <FollowupStrip />
 
       {aiSummaryOpen && (
-        <div className="bg-mystic/10 border-b border-mystic/20 px-3 py-2 text-xs leading-relaxed shrink-0">
-          <div className="flex items-start gap-2">
-            <div className="shrink-0 w-5 h-5 rounded grid place-items-center bg-mystic/20 mt-0.5">
-              <span className="text-mystic text-2xs font-bold">AI</span>
-            </div>
-            <div className="flex-1 text-fg/90">
-              <span className="text-mystic font-semibold">สรุปสถานการณ์:</span> ตอนนี้มี{' '}
-              <span className="text-crit font-semibold">{critCount} เคสวิกฤต</span> เด่นสุดคือ{' '}
-              <button onClick={() => openCaseDrawer('c-pay-001')} className="underline text-info hover:text-fg">
-                ยอดโอน 2,500฿ ไม่ตรงบิลของคุณพิมพ์ชนก
-              </button>{' '}
-              ค้างมา 14 นาที,{' '}
-              <button onClick={() => openCaseDrawer('c-sens-002')} className="underline text-info hover:text-fg">
-                คุณวรากรขู่ขอคืนเงินใน FB
-              </button>{' '}
-              mood ระดับ 5, และ{' '}
-              <button onClick={() => openCaseDrawer('c-celtic-003')} className="underline text-info hover:text-fg">
-                Celtic Cross ของคุณธนกฤต
-              </button>{' '}
-              เกิน SLA 22 นาทีแล้ว แนะนำให้ <span className="text-warn">รับเคสยอดโอนก่อน</span>{' '}
-              เพราะเป็นเงินสดและกำลังเสียลูกค้า
-            </div>
-            <button onClick={() => setAiSummaryOpen(false)} className="text-mute hover:text-fg">
-              ✕
-            </button>
-          </div>
-        </div>
+        <TriageSummary
+          cases={allCases}
+          critCount={critCount}
+          warnCount={warnCount}
+          onOpen={openCaseDrawer}
+          onClose={() => setAiSummaryOpen(false)}
+        />
       )}
 
       <div className="overflow-y-auto flex-1 min-h-0">
@@ -239,5 +219,107 @@ export function TriageQueue() {
         )}
       </div>
     </section>
+  );
+}
+
+function parseOverdueSec(display: string): number {
+  if (!display.startsWith('-')) return 0;
+  const m = display.slice(1).match(/^(\d+):(\d+)$/);
+  if (!m) return 0;
+  return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+}
+
+function TriageSummary({
+  cases,
+  critCount,
+  warnCount,
+  onOpen,
+  onClose,
+}: {
+  cases: TriageCase[];
+  critCount: number;
+  warnCount: number;
+  onOpen: (id: string) => void;
+  onClose: () => void;
+}) {
+  const top3 = useMemo(
+    () =>
+      [...cases]
+        .map((c) => ({ ...c, _over: parseOverdueSec(c.slaDisplay) }))
+        .sort((a, b) => {
+          const sev = (s: string) => (s === 'crit' ? 0 : s === 'warn' ? 1 : 2);
+          if (sev(a.severity) !== sev(b.severity)) return sev(a.severity) - sev(b.severity);
+          if (b._over !== a._over) return b._over - a._over;
+          return (b.amount ?? 0) - (a.amount ?? 0);
+        })
+        .slice(0, 3),
+    [cases],
+  );
+
+  return (
+    <div className="bg-mystic/10 border-b border-mystic/20 px-3 py-2 text-xs leading-relaxed shrink-0">
+      <div className="flex items-start gap-2">
+        <div className="shrink-0 w-5 h-5 rounded grid place-items-center bg-mystic/20 mt-0.5">
+          <span className="text-mystic text-2xs font-bold">AI</span>
+        </div>
+        <div className="flex-1 text-fg/90">
+          {cases.length === 0 ? (
+            <>
+              <span className="text-mystic font-semibold">สรุป:</span>{' '}
+              ทุกเคสจัดการครบ — คิวเร่งด่วนว่างเปล่า ✓
+            </>
+          ) : (
+            <>
+              <span className="text-mystic font-semibold">สรุปสถานการณ์:</span> ตอนนี้มี{' '}
+              {critCount > 0 ? (
+                <>
+                  <span className="text-crit font-semibold">{critCount} เคสวิกฤต</span>
+                  {warnCount > 0 && (
+                    <>
+                      {' + '}
+                      <span className="text-warn">{warnCount} เคสเตือน</span>
+                    </>
+                  )}
+                  {'. '}
+                  {top3.length > 0 && <>เด่นสุดคือ </>}
+                </>
+              ) : warnCount > 0 ? (
+                <>
+                  <span className="text-warn">{warnCount} เคสเตือน</span> — ยังไม่มีวิกฤต. ที่ใกล้เกินสุด:{' '}
+                </>
+              ) : (
+                <span className="text-ok">{cases.length} เคสในคิว — ทั้งหมดยังในขีดเวลา</span>
+              )}
+              {top3.map((c, i) => (
+                <span key={c.id}>
+                  <button
+                    onClick={() => onOpen(c.id)}
+                    className="underline text-info hover:text-fg"
+                  >
+                    {c.customer}
+                    {c.amount ? ` · ฿${c.amount.toLocaleString()}` : ` · ${typeMeta(c.type).label}`}
+                  </button>{' '}
+                  {c._over > 0 ? (
+                    <span className="text-mute">(เกิน SLA {Math.floor(c._over / 60)} นาที)</span>
+                  ) : (
+                    <span className="text-mute">({c.slaDisplay})</span>
+                  )}
+                  {i < top3.length - 1 ? ', ' : ''}
+                </span>
+              ))}
+              {top3.length > 0 && critCount > 0 && (
+                <>
+                  {'. '}แนะนำ <span className="text-warn">เริ่มจาก {top3[0].customer}</span> ก่อน
+                  {top3[0].amount ? ' เพราะเป็นเงินสด' : ' เพราะเร่งด่วนสุด'}
+                </>
+              )}
+            </>
+          )}
+        </div>
+        <button onClick={onClose} className="text-mute hover:text-fg">
+          ✕
+        </button>
+      </div>
+    </div>
   );
 }
