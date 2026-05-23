@@ -85,17 +85,17 @@ function AuthSplash({ hint }: { hint?: string }) {
       }}
     >
       <div className="flex flex-col items-center gap-4">
-        <div className="relative w-14 h-14 rounded-md overflow-hidden border border-mystic/40 shadow-[0_0_24px_rgba(139,92,246,.45)] animate-pulse">
+        <div className="relative w-32 h-32 animate-pulse">
           <Image
             src="/assets/juntra-logo.png"
             alt="Juntra"
             fill
-            sizes="56px"
+            sizes="128px"
             priority
-            className="object-cover"
+            className="object-contain mix-blend-screen"
           />
         </div>
-        <div className="font-rune text-lg tracking-[.3em] text-mystic">JUNTRA</div>
+        <div className="font-rune text-xl tracking-[.3em] text-mystic">JUNTRA</div>
         <div className="text-2xs text-mute mono tracking-widest">
           {hint ?? 'กำลังตรวจสอบสถานะ...'}
         </div>

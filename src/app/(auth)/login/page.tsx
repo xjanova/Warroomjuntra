@@ -87,21 +87,22 @@ export default function LoginPage() {
           <span className="login-spark" style={{ left: '38%', top: '90%', animationDelay: '-4.2s' }} />
         </div>
 
-        {/* Logo + tagline (top) */}
-        <header className="relative z-10 flex items-center gap-3 px-8 pt-6">
-          <div className="relative w-10 h-10 rounded-md overflow-hidden border border-mystic/40 shadow-[0_0_18px_rgba(139,92,246,.35)]">
+        {/* Logo + tagline (top) — logo PNG has black bg baked in, so use
+            mix-blend-mode: screen to knock black out against the dark page bg */}
+        <header className="relative z-10 flex items-center gap-4 px-8 pt-6">
+          <div className="relative w-24 h-24 shrink-0">
             <Image
               src="/assets/juntra-logo.png"
               alt="Juntra"
               fill
-              sizes="40px"
+              sizes="96px"
               priority
-              className="object-cover"
+              className="object-contain mix-blend-screen"
             />
           </div>
           <div>
-            <div className="font-rune text-lg tracking-[.25em] text-fg leading-none">JUNTRA</div>
-            <div className="text-2xs mono text-mystic mt-0.5 tracking-widest">WAR ROOM · MISSION CONTROL</div>
+            <div className="font-rune text-2xl tracking-[.25em] text-fg leading-none">JUNTRA</div>
+            <div className="text-2xs mono text-mystic mt-1 tracking-widest">WAR ROOM · MISSION CONTROL</div>
           </div>
         </header>
 
@@ -127,13 +128,13 @@ export default function LoginPage() {
 
       {/* ───────────────────────── RIGHT — auth form ───────────────────────── */}
       <section className="relative flex flex-col bg-panel/70 backdrop-blur-xl border-l border-mystic/15 overflow-y-auto">
-        {/* Mobile-only logo top */}
+        {/* Mobile-only logo top (logo PNG has black bg baked in → mix-blend-mode: screen) */}
         <div className="md:hidden flex items-center gap-3 px-6 pt-5">
-          <div className="relative w-9 h-9 rounded-md overflow-hidden border border-mystic/40">
-            <Image src="/assets/juntra-logo.png" alt="Juntra" fill sizes="36px" priority className="object-cover" />
+          <div className="relative w-16 h-16 shrink-0">
+            <Image src="/assets/juntra-logo.png" alt="Juntra" fill sizes="64px" priority className="object-contain mix-blend-screen" />
           </div>
           <div>
-            <div className="font-rune text-base tracking-[.25em] text-fg leading-none">JUNTRA</div>
+            <div className="font-rune text-lg tracking-[.25em] text-fg leading-none">JUNTRA</div>
             <div className="text-2xs mono text-mystic mt-0.5">WAR ROOM</div>
           </div>
         </div>
