@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useWarroom } from '@/lib/stores/warroom';
 import {
   useSettings,
@@ -11,13 +11,24 @@ import {
 import { DrawerShell } from './DrawerShell';
 import { Switch } from '@/components/ui/Switch';
 import { Pill } from '@/components/ui/Pill';
-import { pairConnection, verifyConnection, fetchPlaygroundProviders, eveChat, type PlaygroundProvider } from '@/lib/api';
+import {
+  pairConnection,
+  verifyConnection,
+  loginAndPair,
+  verifyTwoFactorAndPair,
+  fetchPlaygroundProviders,
+  eveChat,
+  type PlaygroundProvider,
+  type PairUser,
+} from '@/lib/api';
 import { cn } from '@/lib/utils';
 import {
   getVoices,
   isSpeechRecognitionSupported,
   isSpeechSynthesisSupported,
   speak as ttsSpeak,
+  VOICE_PRESETS,
+  type VoicePresetKey,
 } from '@/lib/eve/voice';
 import { ACTION_VOCABULARY } from '@/lib/eve/actions';
 import {
@@ -33,6 +44,8 @@ import {
   EyeOff,
   Trash2,
   Sparkles,
+  LogIn,
+  ShieldCheck,
 } from 'lucide-react';
 
 type TabKey = 'connect' | 'eve' | 'sla' | 'notif' | 'sound' | 'layout' | 'shift' | 'advanced';
@@ -131,6 +144,9 @@ function ConnectTab() {
   const [showToken, setShowToken] = useState(false);
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState<{ tone: 'ok' | 'crit'; msg: string } | null>(null);
+  // Default: paste-token block collapsed so the login form is the primary path.
+  // Auto-expand if user already has a token saved (so they can see/rotate it).
+  const [tokenBlockOpen, setTokenBlockOpen] = useState(!!conn.token);
 
   // keep local form in sync if store mutates from elsewhere (e.g. disconnect)
   useEffect(() => setBaseUrlLocal(conn.baseUrl), [conn.baseUrl]);
@@ -178,29 +194,13 @@ function ConnectTab() {
       <section>
         <div className="t-h mb-2">เชื่อมต่อกับ thaiprompt.online (Admin API)</div>
         <p className="text-mute leading-relaxed">
-          ใช้ <span className="text-fg">Sanctum admin token</span> ที่มี ability{' '}
-          <code className="mono text-fg">[&apos;admin&apos;]</code> ออกจาก thaiprompt.online ได้สามทาง:
-        </p>
-        <ol className="list-decimal list-inside text-mute leading-relaxed mt-1 space-y-0.5">
-          <li>
-            Admin มือถือ (Flutter) → สแกน QR pair_code (
-            <code className="mono text-fg">POST /api/admin/auth/pair/claim</code>)
-          </li>
-          <li>
-            Login admin web → tinker:{' '}
-            <code className="mono text-fg">
-              User::find(id)-&gt;createToken(&apos;warroom&apos;, [&apos;admin&apos;])-&gt;plainTextToken
-            </code>
-          </li>
-          <li>หน้าจัดการ token ใน admin panel (ถ้ามี)</li>
-        </ol>
-        <p className="text-mute leading-relaxed mt-2">
-          Base URL ต้องลงท้ายด้วย <code className="mono text-fg">/api/admin</code> เพราะ warroom
-          เรียก endpoints แบบ <code className="mono text-fg">/auth/me</code>, <code className="mono text-fg">/dashboard</code>, <code className="mono text-fg">/fortune/readings</code> ฯลฯ
+          Login ด้วยอีเมล/รหัสผ่านของ admin (วิธีหลัก) หรือใช้ Sanctum token ที่ออกแล้ว
+          Base URL ต้องลงท้ายด้วย <code className="mono text-fg">/api/admin</code>
         </p>
       </section>
 
-      <section className="space-y-2">
+      {/* Shared Base URL — both login and token paths use this */}
+      <section>
         <label className="block">
           <div className="text-dim mb-1">Base URL</div>
           <input
@@ -223,69 +223,107 @@ function ConnectTab() {
             ))}
           </div>
         </label>
-
-        <label className="block">
-          <div className="text-dim mb-1 flex items-center gap-2">
-            <span>API Token</span>
-            <button
-              type="button"
-              onClick={() => setShowToken((v) => !v)}
-              className="btn btn-ghost h-5 px-1.5 text-2xs"
-            >
-              {showToken ? <EyeOff size={10} /> : <Eye size={10} />}
-              {showToken ? 'ซ่อน' : 'แสดง'}
-            </button>
-          </div>
-          <input
-            type={showToken ? 'text' : 'password'}
-            value={token}
-            onChange={(e) => setTokenLocal(e.target.value)}
-            placeholder="1|XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
-            spellCheck={false}
-            autoComplete="off"
-            className="w-full px-2 py-1.5 text-xs mono"
-          />
-          {conn.token && !dirty && !showToken && (
-            <div className="text-2xs text-mute mt-1 mono">
-              เก็บไว้: {tokenMasked}
-            </div>
-          )}
-        </label>
       </section>
 
-      <section className="flex flex-wrap gap-2">
+      {/* Primary path: email/password login */}
+      <LoginForm
+        baseUrl={baseUrl}
+        onLoggedIn={(user) => setFlash({ tone: 'ok', msg: `เข้าสู่ระบบสำเร็จ — สวัสดี ${user.name}` })}
+        onError={(msg) => setFlash({ tone: 'crit', msg })}
+        disabled={!baseUrl || conn.status === 'paired'}
+      />
+
+      {/* Secondary path: paste a pre-issued token (collapsible) */}
+      <div className="panel p-0 overflow-hidden">
         <button
           type="button"
-          disabled={busy || !baseUrl || !token}
-          onClick={onPair}
-          className="btn btn-primary"
+          className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-rowhi"
+          onClick={() => setTokenBlockOpen((v) => !v)}
         >
-          <Plug size={12} />
-          {conn.status === 'paired' && !dirty ? 'ทดสอบใหม่' : 'เชื่อมต่อ'}
+          <span className="t-h">หรือใช้ Sanctum Token ที่ออกแล้ว</span>
+          <div className="flex-1" />
+          {conn.token && <Pill tone="dim">มี token</Pill>}
+          <span className="text-mute text-2xs">{tokenBlockOpen ? '▾' : '▸'}</span>
         </button>
-        {conn.status === 'paired' && !dirty && (
-          <button type="button" disabled={busy} onClick={onReverify} className="btn btn-info">
-            <RefreshCw size={12} className={busy ? 'animate-spin' : ''} />
-            รีเฟรชสถานะ
-          </button>
+
+        {tokenBlockOpen && (
+          <div className="px-3 pb-3 space-y-2 border-t border-line pt-3">
+            <ol className="list-decimal list-inside text-mute leading-relaxed space-y-0.5 text-2xs">
+              <li>Admin มือถือ → สแกน QR pair_code</li>
+              <li>tinker: <code className="mono text-fg">User::find(id)-&gt;createToken(&apos;warroom&apos;, [&apos;admin&apos;])-&gt;plainTextToken</code></li>
+              <li>หน้าจัดการ token ใน admin panel (ถ้ามี)</li>
+            </ol>
+
+            <label className="block">
+              <div className="text-dim mb-1 flex items-center gap-2">
+                <span>API Token</span>
+                <button
+                  type="button"
+                  onClick={() => setShowToken((v) => !v)}
+                  className="btn btn-ghost h-5 px-1.5 text-2xs"
+                >
+                  {showToken ? <EyeOff size={10} /> : <Eye size={10} />}
+                  {showToken ? 'ซ่อน' : 'แสดง'}
+                </button>
+              </div>
+              <input
+                type={showToken ? 'text' : 'password'}
+                value={token}
+                onChange={(e) => setTokenLocal(e.target.value)}
+                placeholder="1|XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+                spellCheck={false}
+                autoComplete="off"
+                className="w-full px-2 py-1.5 text-xs mono"
+              />
+              {conn.token && !dirty && !showToken && (
+                <div className="text-2xs text-mute mt-1 mono">
+                  เก็บไว้: {tokenMasked}
+                </div>
+              )}
+            </label>
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={busy || !baseUrl || !token}
+                onClick={onPair}
+                className="btn btn-primary"
+              >
+                <Plug size={12} />
+                {conn.status === 'paired' && !dirty ? 'ทดสอบใหม่' : 'เชื่อมต่อด้วย Token'}
+              </button>
+              <div className="flex-1" />
+              <a
+                href="https://github.com/xjanova/Thaiprompt-Affiliate#admin-api"
+                target="_blank"
+                rel="noreferrer"
+                className="btn btn-ghost"
+              >
+                <ExternalLink size={12} />
+                วิธีออก token
+              </a>
+            </div>
+          </div>
         )}
-        {(conn.token || conn.user) && (
-          <button type="button" disabled={busy} onClick={onDisconnect} className="btn btn-crit">
-            <Trash2 size={12} />
-            ตัดการเชื่อมต่อ
-          </button>
-        )}
-        <div className="flex-1" />
-        <a
-          href="https://github.com/xjanova/Thaiprompt-Affiliate#admin-api"
-          target="_blank"
-          rel="noreferrer"
-          className="btn btn-ghost"
-        >
-          <ExternalLink size={12} />
-          วิธีออก token
-        </a>
-      </section>
+      </div>
+
+      {/* Re-verify + disconnect (always visible when there's a saved session) */}
+      {(conn.status === 'paired' || conn.token || conn.user) && (
+        <section className="flex flex-wrap gap-2">
+          {conn.status === 'paired' && !dirty && (
+            <button type="button" disabled={busy} onClick={onReverify} className="btn btn-info">
+              <RefreshCw size={12} className={busy ? 'animate-spin' : ''} />
+              รีเฟรชสถานะ
+            </button>
+          )}
+          {(conn.token || conn.user) && (
+            <button type="button" disabled={busy} onClick={onDisconnect} className="btn btn-crit">
+              <Trash2 size={12} />
+              ตัดการเชื่อมต่อ
+            </button>
+          )}
+        </section>
+      )}
 
       {flash && (
         <div
@@ -339,6 +377,186 @@ function ConnectTab() {
         </p>
       </section>
     </div>
+  );
+}
+
+// ---------- Sub-component: LoginForm (email/password + 2FA) ----------
+
+function LoginForm({
+  baseUrl,
+  onLoggedIn,
+  onError,
+  disabled,
+}: {
+  baseUrl: string;
+  onLoggedIn: (user: PairUser) => void;
+  onError: (msg: string) => void;
+  disabled?: boolean;
+}) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [twoFactorChallenge, setTwoFactorChallenge] = useState<string | null>(null);
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const codeInputRef = useRef<HTMLInputElement>(null);
+
+  // Auto-focus the 2FA code field once it appears
+  useEffect(() => {
+    if (twoFactorChallenge) codeInputRef.current?.focus();
+  }, [twoFactorChallenge]);
+
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (busy) return;
+    setBusy(true);
+
+    try {
+      if (twoFactorChallenge) {
+        // Stage 2: exchange code for token
+        const res = await verifyTwoFactorAndPair({
+          baseUrl,
+          challenge_token: twoFactorChallenge,
+          code,
+        });
+        if (res.ok) {
+          // Reset form so token stays out of the DOM
+          setTwoFactorChallenge(null);
+          setPassword('');
+          setCode('');
+          onLoggedIn(res.user);
+        } else {
+          onError(res.error);
+        }
+      } else {
+        // Stage 1: email/password
+        const res = await loginAndPair({ baseUrl, email, password });
+        if (res.ok) {
+          setPassword('');
+          onLoggedIn(res.user);
+        } else if ('requires_2fa' in res) {
+          setTwoFactorChallenge(res.challenge_token);
+          // Don't clear password yet — operator may want to cancel back
+        } else {
+          onError(res.error);
+        }
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function cancelTwoFactor() {
+    setTwoFactorChallenge(null);
+    setCode('');
+  }
+
+  const showStage2 = !!twoFactorChallenge;
+
+  return (
+    <form className="panel p-3 space-y-3" onSubmit={onSubmit}>
+      <div className="flex items-center gap-2">
+        <LogIn size={14} className="text-info" />
+        <span className="t-h">{showStage2 ? 'ยืนยัน 2FA' : 'Login admin'}</span>
+        {showStage2 && (
+          <Pill tone="warn">รอรหัส 2FA</Pill>
+        )}
+      </div>
+
+      {!showStage2 && (
+        <>
+          <div>
+            <label className="text-2xs text-mute block mb-1">อีเมล</label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="admin@thaiprompt.online"
+              autoComplete="username"
+              spellCheck={false}
+              className="w-full px-2 py-1.5 text-xs mono"
+              disabled={busy || disabled}
+              required
+            />
+          </div>
+
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <label className="text-2xs text-mute">รหัสผ่าน</label>
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                className="btn btn-ghost h-5 px-1.5 text-2xs"
+                tabIndex={-1}
+              >
+                {showPassword ? <EyeOff size={10} /> : <Eye size={10} />}
+                {showPassword ? 'ซ่อน' : 'แสดง'}
+              </button>
+            </div>
+            <input
+              type={showPassword ? 'text' : 'password'}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              autoComplete="current-password"
+              className="w-full px-2 py-1.5 text-xs"
+              disabled={busy || disabled}
+              required
+            />
+          </div>
+        </>
+      )}
+
+      {showStage2 && (
+        <>
+          <div className="text-2xs text-mute">
+            ส่งรหัส 6 หลักจากแอป Authenticator (Google Authenticator, Authy, 1Password ฯลฯ)
+          </div>
+          <div>
+            <label className="text-2xs text-mute block mb-1">รหัส 2FA</label>
+            <input
+              ref={codeInputRef}
+              type="text"
+              inputMode="numeric"
+              pattern="\d{6}"
+              maxLength={6}
+              value={code}
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+              placeholder="123456"
+              autoComplete="one-time-code"
+              spellCheck={false}
+              className="w-full px-2 py-1.5 text-base mono tracking-widest text-center"
+              disabled={busy}
+              required
+            />
+          </div>
+        </>
+      )}
+
+      <div className="flex gap-2 items-center">
+        <button
+          type="submit"
+          disabled={
+            busy ||
+            disabled ||
+            (showStage2 ? code.length !== 6 : !email || !password)
+          }
+          className="btn btn-primary"
+        >
+          {showStage2 ? <ShieldCheck size={12} /> : <LogIn size={12} />}
+          {busy ? 'กำลังเข้าระบบ...' : showStage2 ? 'ยืนยัน + เข้าสู่ระบบ' : 'เข้าสู่ระบบ'}
+        </button>
+        {showStage2 && (
+          <button type="button" onClick={cancelTwoFactor} className="btn btn-ghost" disabled={busy}>
+            ยกเลิก 2FA
+          </button>
+        )}
+        <div className="flex-1" />
+        {disabled && !showStage2 && (
+          <span className="text-2xs text-mute">กรุณากรอก Base URL ก่อน</span>
+        )}
+      </div>
+    </form>
   );
 }
 
@@ -723,6 +941,36 @@ function EveVoicePanel() {
           {voices.length === 0 && ttsSupported && (
             <div className="text-2xs text-mute mt-1">กำลังโหลดรายชื่อเสียง...</div>
           )}
+        </div>
+
+        {/* Preset persona buttons — quick-set pitch+rate without touching sliders */}
+        <div>
+          <div className="text-2xs text-mute mb-1.5">โทนเสียง (preset)</div>
+          <div className="flex flex-wrap gap-1.5">
+            {(Object.keys(VOICE_PRESETS) as VoicePresetKey[]).map((key) => {
+              const p = VOICE_PRESETS[key];
+              const active =
+                Math.abs(voice.speak.rate - p.rate) < 0.01 &&
+                Math.abs(voice.speak.pitch - p.pitch) < 0.01;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setEveSpeak({ rate: p.rate, pitch: p.pitch })}
+                  disabled={!voice.speak.enabled}
+                  className={cn(
+                    'text-2xs px-2 py-1 rounded border transition',
+                    active
+                      ? 'border-mystic/60 bg-mystic/15 text-fg'
+                      : 'border-line text-dim hover:text-fg hover:border-mystic/40',
+                  )}
+                  title={`rate=${p.rate} · pitch=${p.pitch}`}
+                >
+                  {p.label}
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         <div className="grid grid-cols-3 gap-3">

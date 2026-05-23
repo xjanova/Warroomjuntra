@@ -110,8 +110,8 @@ export type {
   AdminUserStats,
   Iso8601,
 } from './types';
-export { pairConnection, verifyConnection } from './pair';
-export type { PairResult } from './pair';
+export { pairConnection, verifyConnection, loginAndPair, verifyTwoFactorAndPair } from './pair';
+export type { PairResult, LoginPairResult, PairUser } from './pair';
 export { useAdminData, invalidate, evict, refreshAll } from './useAdminData';
 export type { AdminDataResult, DataSource, UseAdminDataOptions } from './useAdminData';
 export { useFortuneFeed } from './useFortuneFeed';

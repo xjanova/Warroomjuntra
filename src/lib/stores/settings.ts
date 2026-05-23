@@ -171,10 +171,12 @@ const DEFAULT_EVE: EveConfig = {
       autoSendOnFinal: true,
     },
     speak: {
+      // Default OFF — operator opts in via Settings. But the cute preset is
+      // applied on first enable: pitch 1.3 + rate 1.05 → young-girl feel.
       enabled: false,
-      voiceName: null,
-      rate: 1.0,
-      pitch: 1.0,
+      voiceName: null,    // auto-pick best Thai female voice
+      rate: 1.05,
+      pitch: 1.30,
       volume: 1.0,
       interruptOnNew: true,
     },

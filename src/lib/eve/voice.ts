@@ -213,20 +213,50 @@ export function getVoices(): Promise<SpeechSynthesisVoice[]> {
 }
 
 /**
- * Pick the best Thai voice from the cached list. Prefers female-sounding
- * names ("Kanya", "Premwadee", "Narisa") common across iOS/macOS/Chrome.
- * Falls back to the first th-TH voice, then null.
+ * Pick the best Thai female voice — used for Eve's "cute young girl" default
+ * persona. Ordered by perceived youthfulness/quality:
+ *   1. Achara (MS Online Natural) — best free quality on Windows/Edge
+ *   2. Premwadee (MS Online Natural) — also great, slightly more mature
+ *   3. Kanya (macOS) — youthful tone
+ *   4. Narisa (iOS) — fallback
+ *   5. Any voice with "female" in the name
+ *   6. Any th-TH voice (last resort — may be male)
+ * Returns null if no Thai voice is installed.
+ *
+ * The "cute" feel ultimately comes from pitch + rate, not the voice list —
+ * see DEFAULT_EVE.voice.speak for the recommended starting tuning.
  */
 export function pickBestThaiVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | null {
   const thai = voices.filter((v) => v.lang?.toLowerCase().startsWith('th'));
   if (thai.length === 0) return null;
-  const femaleHints = ['kanya', 'premwadee', 'narisa', 'siri', 'female'];
-  for (const hint of femaleHints) {
+  // Explicitly skip Niwat (male) — only fall back to it if literally nothing else.
+  const youthfulHints = ['achara', 'premwadee', 'kanya', 'narisa', 'siri'];
+  for (const hint of youthfulHints) {
     const match = thai.find((v) => v.name.toLowerCase().includes(hint));
     if (match) return match;
   }
+  // "female" / "ผู้หญิง" tags
+  const femaleMatch = thai.find((v) => /female|ผู้หญิง|women/i.test(v.name));
+  if (femaleMatch) return femaleMatch;
+  // Any non-male th-TH voice
+  const nonMale = thai.find((v) => !/niwat|male|ผู้ชาย|men/i.test(v.name));
+  if (nonMale) return nonMale;
   return thai[0] ?? null;
 }
+
+/**
+ * Pre-tuned voice personas. Apply these to `eve.voice.speak` via
+ * Settings → Eve AI tab. The "cute" preset is what Eve uses by default.
+ */
+export const VOICE_PRESETS = {
+  cute:        { rate: 1.05, pitch: 1.30, label: 'น่ารัก (เด็กสาว)' },
+  cuter:       { rate: 1.10, pitch: 1.45, label: 'เด็กมาก (สดใส)' },
+  polite:      { rate: 1.00, pitch: 1.05, label: 'สุภาพ (มาตรฐาน)' },
+  authoritative: { rate: 0.95, pitch: 0.85, label: 'มีอำนาจ (เป็นทางการ)' },
+  calm:        { rate: 0.90, pitch: 1.00, label: 'สงบ (ค่อยๆ พูด)' },
+} as const;
+
+export type VoicePresetKey = keyof typeof VOICE_PRESETS;
 
 /**
  * Speak `text` via SpeechSynthesis. Returns a handle to cancel.

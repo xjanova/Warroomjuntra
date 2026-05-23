@@ -50,3 +50,7 @@ Thumbs.db
 *.zip
 .warroom-token.local
 .claude-letters/
+
+# claude tooling local state (lock files, session caches)
+.claude/scheduled_tasks.lock
+.claude/sessions/
