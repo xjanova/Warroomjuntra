@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useEve, type EveMood } from '@/lib/stores/eve';
+import { useSettings, isPaired as isPairedFn } from '@/lib/stores/settings';
+import { eveChat, describeError } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 type Responder = { match: RegExp; mood: EveMood; reply: string };
@@ -72,23 +74,64 @@ export function EveChatBody({
   const { typing, messages, setMood, setTyping, addMessage } = useEve();
   const [draft, setDraft] = useState('');
   const msgsRef = useRef<HTMLDivElement>(null);
+  const paired = useSettings((s) => isPairedFn(s));
 
   const respond = useCallback(
     async (text: string) => {
+      setMood('thinking');
+      setTyping(true);
+
+      // Paired? → real LLM via /api/admin/eve/chat
+      if (paired) {
+        // Build conversation history from store. Drop HTML tags so the LLM
+        // sees plain Thai, not <b> markup.
+        const history = messages
+          .slice(-10)
+          .map((m) => ({
+            role: (m.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
+            content: m.text.replace(/<[^>]+>/g, '').slice(0, 500),
+          }));
+
+        try {
+          const res = await eveChat({
+            message: text,
+            history,
+            // Context: pass minimal warroom state so Eve can reference it. The
+            // backend has its own copy via Sanctum user — we just hint here.
+            context: { source: 'warroom-dock', ts: new Date().toISOString() },
+          });
+          setTyping(false);
+          // Convert plain newlines to <br> for display.
+          const html = (res.reply || 'Eve ตอบไม่ได้ในตอนนี้ค่ะ').replace(/\n/g, '<br>');
+          addMessage({ role: 'eve', text: html });
+          setMood(res.mood ?? 'talking');
+          setTimeout(() => setMood('idle'), 2400);
+          return;
+        } catch (e) {
+          setTyping(false);
+          addMessage({
+            role: 'eve',
+            text: '<i>ขออภัยค่ะ — เชื่อมต่อ AI ไม่สำเร็จ:</i><br><small class="text-2xs">' + describeError(e) + '</small>',
+          });
+          setMood('concerned');
+          setTimeout(() => setMood('idle'), 2400);
+          return;
+        }
+      }
+
+      // Unpaired → fall back to the canned RESPONDERS so Eve still feels alive.
       const found = RESPONDERS.find((r) => r.match.test(text));
       const reply = found
         ? found.reply
         : 'เข้าใจค่ะ · Eve ยังเรียนรู้อยู่นะคะ ลองถามแบบ <b>"สรุปสถานการณ์"</b> หรือ <b>"เคสด่วน"</b> ก็ได้ค่ะ ✦';
       const replyMood: EveMood = found ? found.mood : 'thinking';
-      setMood('thinking');
-      setTyping(true);
       await new Promise((r) => setTimeout(r, 800 + Math.random() * 500));
       setTyping(false);
       addMessage({ role: 'eve', text: reply });
       setMood(replyMood);
       setTimeout(() => setMood('idle'), 2400);
     },
-    [setMood, setTyping, addMessage],
+    [paired, messages, setMood, setTyping, addMessage],
   );
 
   const onAction = useCallback((action: string) => {

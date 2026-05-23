@@ -353,6 +353,34 @@ export async function fetchRanks() {
   }>>({ path: '/ranks' });
 }
 
+// ---- Eve (Warroom AI assistant) ------------------------------------------
+
+export type EveChatRequest = {
+  message: string;
+  history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  context?: Record<string, unknown>;
+  provider?: string; // default 'groq'
+  model?: string;    // default 'llama-3.3-70b-versatile'
+};
+
+export type EveChatResponse = {
+  reply: string;
+  provider: string;
+  model: string | null;
+  latency_ms: number;
+  tokens: number | null;
+  mood: 'idle' | 'happy' | 'talking' | 'thinking' | 'concerned' | 'surprise';
+};
+
+export async function eveChat(payload: EveChatRequest) {
+  return apiRequest<EveChatResponse>({
+    method: 'POST',
+    path: '/eve/chat',
+    body: payload,
+    timeoutMs: 30_000,
+  });
+}
+
 // ---- Admin chat takeover (Warroom /chat compose) --------------------------
 
 export async function sendChatMessage(payload: {

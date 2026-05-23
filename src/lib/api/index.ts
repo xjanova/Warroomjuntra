@@ -58,6 +58,7 @@ export {
   cancelReading,
   sendChatMessage,
   suggestChatReply,
+  eveChat,
   fetchSmsInbox,
   fetchPaymentReconStats,
   matchSms,
@@ -81,6 +82,8 @@ export type {
   ModerationBan,
   PlaygroundProvider,
   PlaygroundResult,
+  EveChatRequest,
+  EveChatResponse,
 } from './endpoints';
 export type {
   DashboardResponse,
