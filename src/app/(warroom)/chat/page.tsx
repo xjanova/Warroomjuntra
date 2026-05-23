@@ -7,7 +7,7 @@ import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { Switch } from '@/components/ui/Switch';
 import { Kbd } from '@/components/ui/Kbd';
 import { useWarroom } from '@/lib/stores/warroom';
-import { useFortuneFeed, sendChatMessage, suggestChatReply, describeError } from '@/lib/api';
+import { useFortuneFeed, sendChatMessage, suggestChatReply, fetchReadingTranscript, describeError, type ReadingTranscriptMessage } from '@/lib/api';
 import { useSettings, isPaired as isPairedFn } from '@/lib/stores/settings';
 import { readingToChatThread } from '@/lib/adapters/chat';
 import { cn } from '@/lib/utils';
@@ -17,7 +17,9 @@ const SENTIMENT_30D = 'oo+oo-oo+o-oo+';
 export default function ChatPage() {
   const feed = useFortuneFeed();
   const threads = useMemo<ChatThread[]>(() => {
-    if (feed.source === 'live' && feed.data.length > 0) {
+    // Paired = real, even when empty (operator must see the actual queue,
+    // not stale mocks). Only fall through to mock when truly unpaired.
+    if (feed.source === 'live') {
       return feed.data.map(readingToChatThread);
     }
     return CHAT_THREADS;
@@ -50,6 +52,31 @@ export default function ChatPage() {
     const m = /^r-(\d+)$/.exec(threadId);
     return m ? Number(m[1]) : null;
   };
+
+  // Transcript fetch — only when the active thread is a real (paired) reading.
+  // Cached in state keyed by reading id so switching back doesn't re-fetch.
+  const [transcripts, setTranscripts] = useState<Record<number, ReadingTranscriptMessage[]>>({});
+  const [transcriptLoading, setTranscriptLoading] = useState<number | null>(null);
+  useEffect(() => {
+    if (!paired) return;
+    const rid = readingIdOf(activeId);
+    if (!rid) return;
+    if (transcripts[rid]) return;
+    setTranscriptLoading(rid);
+    let cancelled = false;
+    fetchReadingTranscript(rid)
+      .then((r) => {
+        if (cancelled) return;
+        setTranscripts((m) => ({ ...m, [rid]: r.messages ?? [] }));
+      })
+      .catch(() => {/* fallback to thread-embedded messages */})
+      .finally(() => {
+        if (!cancelled) setTranscriptLoading((id) => (id === rid ? null : id));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeId, paired, transcripts]);
 
   const filtered = useMemo(
     () =>
@@ -231,48 +258,71 @@ export default function ChatPage() {
             </header>
 
             <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3 min-h-0 scanline">
-              {active.messages.map((m) => {
-                if (m.role === 'system') {
+              {(() => {
+                // If we have a fetched server transcript, render that (real Q+A
+                // + admin replies from fortune_admin_qa). Otherwise fall back
+                // to the messages we synthesized from the reading row.
+                const rid = readingIdOf(active.id);
+                const live = rid && transcripts[rid];
+                const isLoading = rid && transcriptLoading === rid && !live;
+                const rendered = live
+                  ? live.map((m) => ({
+                      id: m.id,
+                      role: m.role,
+                      text: m.text,
+                      ts: m.ts ? m.ts.slice(11, 16) : '',
+                      by: m.by ?? undefined,
+                      ai: m.ai ?? undefined,
+                    }))
+                  : active.messages;
+                if (isLoading && rendered.length === 0) {
                   return (
-                    <div key={m.id} className="text-center">
-                      <span className="pill pill-dim border-dashed">{m.text}</span>
-                    </div>
+                    <div className="text-center text-2xs text-mute p-6">กำลังโหลดประวัติสนทนา...</div>
                   );
                 }
-                if (m.role === 'user') {
-                  return (
-                    <div key={m.id} className="flex gap-2 max-w-[80%]">
-                      <div className="bg-rowhi border border-line rounded-lg rounded-tl-sm px-3 py-2 text-sm">
-                        <div>{m.text}</div>
-                        <div className="text-2xs text-mute mono mt-1">{m.ts}</div>
+                return rendered.map((m) => {
+                  if (m.role === 'system') {
+                    return (
+                      <div key={m.id} className="text-center">
+                        <span className="pill pill-dim border-dashed">{m.text}</span>
                       </div>
-                    </div>
-                  );
-                }
-                if (m.role === 'bot') {
+                    );
+                  }
+                  if (m.role === 'user') {
+                    return (
+                      <div key={m.id} className="flex gap-2 max-w-[80%]">
+                        <div className="bg-rowhi border border-line rounded-lg rounded-tl-sm px-3 py-2 text-sm">
+                          <div className="whitespace-pre-wrap break-words">{m.text}</div>
+                          <div className="text-2xs text-mute mono mt-1">{m.ts}</div>
+                        </div>
+                      </div>
+                    );
+                  }
+                  if (m.role === 'bot') {
+                    return (
+                      <div key={m.id} className="flex gap-2 max-w-[80%] ml-auto flex-row-reverse">
+                        <div className="bg-info/8 border border-info/20 rounded-lg rounded-tr-sm px-3 py-2 text-sm text-cyan-200">
+                          <div className="text-2xs text-info/80 mb-0.5 font-semibold flex items-center gap-1">
+                            <span>🤖 บอท</span>
+                            {m.ai && <span className="text-mute font-normal">· {m.ai}</span>}
+                          </div>
+                          <div className="whitespace-pre-wrap break-words">{m.text}</div>
+                          <div className="text-2xs text-info/50 mono mt-1 text-right">{m.ts}</div>
+                        </div>
+                      </div>
+                    );
+                  }
                   return (
                     <div key={m.id} className="flex gap-2 max-w-[80%] ml-auto flex-row-reverse">
-                      <div className="bg-info/8 border border-info/20 rounded-lg rounded-tr-sm px-3 py-2 text-sm text-cyan-200">
-                        <div className="text-2xs text-info/80 mb-0.5 font-semibold flex items-center gap-1">
-                          <span>🤖 บอท</span>
-                          {m.ai && <span className="text-mute font-normal">· {m.ai}</span>}
-                        </div>
-                        <div>{m.text}</div>
-                        <div className="text-2xs text-info/50 mono mt-1 text-right">{m.ts}</div>
+                      <div className="bg-mystic/12 border border-mystic/30 rounded-lg rounded-tr-sm px-3 py-2 text-sm text-violet-200">
+                        <div className="text-2xs text-mystic/90 mb-0.5 font-semibold">👤 {m.by ?? 'admin'}</div>
+                        <div className="whitespace-pre-wrap break-words">{m.text}</div>
+                        <div className="text-2xs text-mystic/60 mono mt-1 text-right">{m.ts}</div>
                       </div>
                     </div>
                   );
-                }
-                return (
-                  <div key={m.id} className="flex gap-2 max-w-[80%] ml-auto flex-row-reverse">
-                    <div className="bg-mystic/12 border border-mystic/30 rounded-lg rounded-tr-sm px-3 py-2 text-sm text-violet-200">
-                      <div className="text-2xs text-mystic/90 mb-0.5 font-semibold">👤 {m.by}</div>
-                      <div>{m.text}</div>
-                      <div className="text-2xs text-mystic/60 mono mt-1 text-right">{m.ts}</div>
-                    </div>
-                  </div>
-                );
-              })}
+                });
+              })()}
             </div>
 
             {aiSuggest && (

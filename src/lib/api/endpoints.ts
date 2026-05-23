@@ -155,6 +155,21 @@ export async function fetchFortuneReading(id: string | number) {
   return apiRequest<FortuneReading>({ path: `/fortune/readings/${id}` });
 }
 
+export type ReadingTranscriptMessage = {
+  id: number;
+  role: 'system' | 'user' | 'bot' | 'admin';
+  text: string;
+  ts: string | null;
+  by?: string | null;
+  ai?: string | null;
+};
+
+export async function fetchReadingTranscript(id: string | number) {
+  return apiRequest<{ reading_id: number; messages: ReadingTranscriptMessage[]; generated_at: string }>({
+    path: `/fortune/readings/${id}/transcript`,
+  });
+}
+
 export async function markReadingPaid(id: string | number, payload?: { amount?: number; note?: string }) {
   return apiRequest<unknown>({
     method: 'POST',

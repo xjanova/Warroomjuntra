@@ -1,11 +1,41 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { usePathname } from 'next/navigation';
 import { useEve, type EveMood } from '@/lib/stores/eve';
 import { useSettings } from '@/lib/stores/settings';
 import { EveAvatar } from './EveAvatar';
 import { EveChatBody } from './EveChatBody';
+
+// Drag-position persistence — saved as offset-from-right-bottom (px), so the
+// dock still feels anchored to the bottom-right when the viewport resizes.
+const DRAG_STORE_KEY = 'warroom-eve-dock-position.v1';
+type DragPos = { right: number; bottom: number };
+const DEFAULT_POS: DragPos = { right: 14, bottom: 36 };
+
+function loadPos(): DragPos {
+  if (typeof window === 'undefined') return DEFAULT_POS;
+  try {
+    const raw = localStorage.getItem(DRAG_STORE_KEY);
+    if (!raw) return DEFAULT_POS;
+    const p = JSON.parse(raw) as DragPos;
+    if (typeof p.right === 'number' && typeof p.bottom === 'number') return p;
+  } catch {}
+  return DEFAULT_POS;
+}
+
+function clampPos(p: DragPos, dockEl: HTMLElement | null): DragPos {
+  if (typeof window === 'undefined') return p;
+  // Keep at least 60×60 px of the dock on-screen so the user can always grab it.
+  const w = dockEl?.offsetWidth ?? 80;
+  const h = dockEl?.offsetHeight ?? 80;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  return {
+    right: Math.max(8 - (w - 60), Math.min(vw - 60, p.right)),
+    bottom: Math.max(8 - (h - 60), Math.min(vh - 60, p.bottom)),
+  };
+}
 
 type ScriptStep = {
   mood: EveMood;
@@ -95,6 +125,72 @@ export function Eve() {
     return () => document.removeEventListener('eve:alert', onAlert);
   }, [setMode, addMessage, setMood]);
 
+  // ── Drag state (call hooks BEFORE any early return so hook order stays stable) ──
+  const dockRef = useRef<HTMLDivElement | null>(null);
+  const [pos, setPos] = useState<DragPos>(DEFAULT_POS);
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStateRef = useRef<{ startX: number; startY: number; startRight: number; startBottom: number } | null>(null);
+  const hasMovedRef = useRef(false);
+
+  // Load saved position once on mount.
+  useEffect(() => {
+    setPos(loadPos());
+  }, []);
+
+  // Re-clamp on window resize so the dock can't end up off-screen.
+  useEffect(() => {
+    const onResize = () => setPos((p) => clampPos(p, dockRef.current));
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  const onPointerDown = useCallback((e: React.PointerEvent) => {
+    // Only initiate drag on primary button + when we have a starting point.
+    if (e.button !== 0) return;
+    // Don't capture drags that started on a real interactive child — buttons
+    // inside Eve still need to click through. The handle wrapper sets
+    // data-drag-handle="true" on the area we accept drags on.
+    const handle = (e.target as HTMLElement).closest('[data-drag-handle="true"]');
+    if (!handle) return;
+    dragStateRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      startRight: pos.right,
+      startBottom: pos.bottom,
+    };
+    hasMovedRef.current = false;
+    setIsDragging(true);
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  }, [pos.right, pos.bottom]);
+
+  const onPointerMove = useCallback((e: React.PointerEvent) => {
+    const s = dragStateRef.current;
+    if (!s) return;
+    const dx = e.clientX - s.startX;
+    const dy = e.clientY - s.startY;
+    if (!hasMovedRef.current && Math.hypot(dx, dy) < 4) return; // ignore tiny jitter — keeps clicks working
+    hasMovedRef.current = true;
+    setPos(clampPos({ right: s.startRight - dx, bottom: s.startBottom - dy }, dockRef.current));
+  }, []);
+
+  const onPointerUp = useCallback((e: React.PointerEvent) => {
+    if (!dragStateRef.current) return;
+    dragStateRef.current = null;
+    setIsDragging(false);
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {}
+    setPos((p) => {
+      const final = clampPos(p, dockRef.current);
+      try {
+        localStorage.setItem(DRAG_STORE_KEY, JSON.stringify(final));
+      } catch {}
+      return final;
+    });
+    // If the pointer barely moved we treat this as a click, not a drag.
+    // The button's onClick still fires naturally because we don't preventDefault.
+  }, []);
+
   // Hide the floating widget on the dedicated /eve page — the page itself
   // renders a full-size Eve, no need for duplication.
   if (pathname === '/eve') return null;
@@ -104,14 +200,33 @@ export function Eve() {
   if (!eveEnabled) return null;
 
   return (
-    <div className="eve-dock">
+    <div
+      className="eve-dock"
+      ref={dockRef}
+      style={{
+        right: pos.right + 'px',
+        bottom: pos.bottom + 'px',
+        cursor: isDragging ? 'grabbing' : undefined,
+        userSelect: isDragging ? 'none' : undefined,
+        transition: isDragging ? 'none' : 'right .15s ease, bottom .15s ease',
+      }}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+    >
       <div className="eve" data-mood={mood}>
         {mode === 'min' && (
           <button
             type="button"
             className="eve-pill"
-            onClick={() => setMode('open')}
-            aria-label="เปิด Eve"
+            data-drag-handle="true"
+            onClick={() => {
+              if (hasMovedRef.current) return; // suppress click after drag
+              setMode('open');
+            }}
+            aria-label="เปิด Eve · ลากเพื่อขยับ"
+            title="ลากเพื่อขยับ · คลิกเพื่อเปิด"
           >
             <span className="eve-pill-port" aria-hidden />
             <span className="eve-pill-meta">
@@ -147,8 +262,13 @@ export function Eve() {
           <button
             type="button"
             className="eve-launcher"
-            onClick={() => setMode('open')}
-            aria-label="เรียก Eve"
+            data-drag-handle="true"
+            onClick={() => {
+              if (hasMovedRef.current) return;
+              setMode('open');
+            }}
+            aria-label="เรียก Eve · ลากเพื่อขยับ"
+            title="ลากเพื่อขยับ · คลิกเพื่อเรียก Eve"
           >
             <span className="eve-launcher-pulse" />
           </button>
@@ -156,9 +276,11 @@ export function Eve() {
 
         {mode === 'open' && (
           <div className="eve-panel">
-            <EveAvatar scale={1} />
+            <div data-drag-handle="true" title="ลากเพื่อขยับ Eve">
+              <EveAvatar scale={1} />
+            </div>
 
-            <div className="eve-head">
+            <div className="eve-head" data-drag-handle="true" title="ลากเพื่อขยับ Eve">
               <div className="eve-head-name">
                 <b>
                   Eve <span className="rune">AI ASSIST</span>

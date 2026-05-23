@@ -73,6 +73,7 @@ export {
   runPlayground,
   fetchPerProviderUsage,
   fetchFortuneWorkersQueue,
+  fetchReadingTranscript,
 } from './endpoints';
 export type {
   AdminMe,
@@ -91,6 +92,7 @@ export type {
   WorkerCallRow,
   CommentDmRow,
   ProviderSplitRow,
+  ReadingTranscriptMessage,
 } from './endpoints';
 export type {
   DashboardResponse,
