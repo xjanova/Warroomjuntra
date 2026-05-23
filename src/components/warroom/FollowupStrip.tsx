@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { Pill } from '@/components/ui/Pill';
+import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { FOLLOWUPS } from '@/lib/mock/warroom';
 import {
   followupBg,
@@ -12,20 +13,47 @@ import {
   sortFollowups,
 } from '@/lib/helpers';
 import { useWarroom } from '@/lib/stores/warroom';
+import { useFortuneFeed } from '@/lib/api';
+import { readingToFollowup } from '@/lib/adapters/followups';
+import type { Followup } from '@/lib/mock/types';
 
 export function FollowupStrip() {
   const [sort, setSort] = useState<'heat' | 'value'>('heat');
   const pushToast = useWarroom((s) => s.pushToast);
-  const items = useMemo(() => sortFollowups(FOLLOWUPS, sort), [sort]);
-  const total = useMemo(() => FOLLOWUPS.reduce((s, f) => s + f.amount, 0), []);
+  const feed = useFortuneFeed();
+
+  const followups = useMemo<Followup[]>(() => {
+    if (feed.source === 'live') {
+      // Real: unpaid + still actively engaged (last 24h). Cap at 20 cards so
+      // the strip doesn't blow up when there's a backlog.
+      const cutoffMs = Date.now() - 24 * 60 * 60 * 1000;
+      return feed.data
+        .filter((r) => !r.is_paid && !r.paid_at)
+        .filter((r) => {
+          const ts = r.created_at ? new Date(r.created_at).getTime() : 0;
+          return ts >= cutoffMs;
+        })
+        .map(readingToFollowup)
+        .slice(0, 20);
+    }
+    // Mock fallback while unpaired so the panel previews correctly.
+    return FOLLOWUPS;
+  }, [feed.data, feed.source]);
+
+  const items = useMemo(() => sortFollowups(followups, sort), [followups, sort]);
+  const total = useMemo(() => followups.reduce((s, f) => s + f.amount, 0), [followups]);
+
+  // Hide when paired AND no real followups — keeps the dashboard clean on slow days.
+  if (feed.source === 'live' && followups.length === 0) return null;
 
   return (
     <div className="border-b border-line bg-gradient-to-r from-warn/10 via-warn/5 to-transparent shrink-0">
       <div className="px-3 pt-2 pb-1.5 flex items-center gap-2">
         <span className="text-base">🎯</span>
         <span className="t-h text-warn">ติดตามด่วน · ลูกค้าสร้างบิลแล้ว ยังไม่จ่าย</span>
-        <Pill tone="warn">{FOLLOWUPS.length} คน</Pill>
+        <Pill tone="warn">{followups.length} คน</Pill>
         <Pill tone="dim">มูลค่ารวม ฿{total.toLocaleString()}</Pill>
+        <DataSourceBadge source={feed.source} isLoading={feed.isLoading} error={feed.error} />
         <span className="text-2xs text-mute">เรียงตามความร้อนของลีด — ทักก่อนเย็น</span>
         <div className="flex-1" />
         <button onClick={() => setSort(sort === 'heat' ? 'value' : 'heat')} className="btn btn-ghost text-2xs">
@@ -33,7 +61,7 @@ export function FollowupStrip() {
         </button>
         <button
           className="btn btn-warn text-2xs"
-          onClick={() => pushToast({ kind: 'warn', title: 'ส่งติดตามแล้ว', body: `${FOLLOWUPS.length} ราย` })}
+          onClick={() => pushToast({ kind: 'warn', title: 'ส่งติดตามแล้ว', body: `${followups.length} ราย` })}
         >
           📣 ส่งติดตามทั้งหมด
         </button>
