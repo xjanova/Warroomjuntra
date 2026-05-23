@@ -62,6 +62,11 @@ export async function pairConnection(input: { baseUrl: string; token: string }):
  * has 2FA enabled, returns `requires_2fa` with a challenge_token to feed into
  * `verifyTwoFactorAndPair`. Otherwise, persists the new Sanctum token and the
  * paired user (same end state as pairConnection with a pasted token).
+ *
+ * IMPORTANT: this function does NOT touch the settings store on failure. If
+ * the operator was already paired and types wrong credentials, their existing
+ * session stays intact (token + status unchanged). LoginForm shows its own
+ * busy spinner during the call, so we don't need a 'testing' status flip.
  */
 export async function loginAndPair(input: { baseUrl: string; email: string; password: string }): Promise<LoginPairResult> {
   const baseUrl = input.baseUrl.trim().replace(/\/+$/, '');
@@ -75,46 +80,36 @@ export async function loginAndPair(input: { baseUrl: string; email: string; pass
     return { ok: false, error: 'Base URL ต้องขึ้นต้นด้วย http:// หรือ https://' };
   }
 
-  const s = useSettings.getState();
-  // Stash baseUrl right away so the client uses it during the anon login call.
-  s.setBaseUrl(baseUrl);
-  s.setConnectionStatus('testing');
-
   try {
+    // baseUrlOverride routes the request through the right host without
+    // mutating the store. The store only gets the success state via commitLogin.
     const res = await login({ email, password }, { baseUrlOverride: baseUrl });
 
     // Discriminate on `token` (present in the success variant, absent in 2FA).
-    // Using 'token' in res lets TS narrow the union correctly.
     if ('token' in res) {
+      // Update store baseUrl now that we know it works
+      useSettings.getState().setBaseUrl(baseUrl);
       return commitLogin(res.token, res.user);
     }
-    // 2FA branch — don't flip status to 'error', we're mid-flow waiting for code
-    s.setConnectionStatus('idle');
+    // 2FA branch — caller will call verifyTwoFactorAndPair next. Store untouched.
     return { ok: false, requires_2fa: true, challenge_token: res.challenge_token };
   } catch (e) {
-    const msg = describeError(e);
-    s.setConnectionStatus('error', msg);
-    s.markChecked();
-    return { ok: false, error: msg };
+    // Don't touch the store — preserve any existing paired session.
+    return { ok: false, error: describeError(e) };
   }
 }
 
 /** Second step of the 2FA flow — exchange challenge_token + code → real token. */
 export async function verifyTwoFactorAndPair(input: { baseUrl: string; challenge_token: string; code: string }): Promise<PairResult> {
-  const s = useSettings.getState();
-  s.setConnectionStatus('testing');
-
   try {
     const res = await verifyTwoFactor(
       { challenge_token: input.challenge_token, code: input.code.trim() },
       { baseUrlOverride: input.baseUrl },
     );
+    useSettings.getState().setBaseUrl(input.baseUrl);
     return commitLogin(res.token, res.user);
   } catch (e) {
-    const msg = describeError(e);
-    s.setConnectionStatus('error', msg);
-    s.markChecked();
-    return { ok: false, error: msg };
+    return { ok: false, error: describeError(e) };
   }
 }
 
