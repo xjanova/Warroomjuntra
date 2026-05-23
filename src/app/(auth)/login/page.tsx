@@ -8,22 +8,19 @@ import { useEve } from '@/lib/stores/eve';
 import {
   loginAndPair,
   verifyTwoFactorAndPair,
-  pairConnection,
   verifyConnection,
   type PairUser,
 } from '@/lib/api';
 import { EveAvatar } from '@/components/eve/EveAvatar';
 import { Pill } from '@/components/ui/Pill';
 import { cn } from '@/lib/utils';
-import { Eye, EyeOff, LogIn, ShieldCheck, Plug } from 'lucide-react';
+import { Eye, EyeOff, LogIn, ShieldCheck } from 'lucide-react';
 
 const ENDPOINT_SUGGESTIONS = [
   'https://thaiprompt.online/api/admin',
   'https://staging.thaiprompt.online/api/admin',
   'http://localhost:8000/api/admin',
 ];
-
-type AuthMethod = 'password' | 'token';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -55,8 +52,6 @@ export default function LoginPage() {
 
   // ── Shared base URL ──
   const [baseUrl, setBaseUrl] = useState(conn.baseUrl || ENDPOINT_SUGGESTIONS[0]);
-  // ── Method tabs ──
-  const [method, setMethod] = useState<AuthMethod>('password');
   // ── Flash ──
   const [flash, setFlash] = useState<{ tone: 'ok' | 'crit'; msg: string } | null>(null);
 
@@ -143,20 +138,11 @@ export default function LoginPage() {
           <div className="mb-6">
             <h1 className="text-fg text-xl font-semibold leading-tight">เข้าสู่ระบบ</h1>
             <p className="text-mute text-xs mt-1 leading-relaxed">
-              Login ด้วยอีเมล/รหัสผ่านของ admin thaiprompt
-              {' · '}
-              หรือใช้ Sanctum token ที่ออกแล้ว
+              เฉพาะ admin thaiprompt — ใช้อีเมลและรหัสผ่านเท่านั้น
+              <span className="block mt-1 text-mystic/80">
+                🔒 รอบหน้า: ต้องยืนยันเครื่องด้วย QR code หลัง login (กำลังพัฒนา)
+              </span>
             </p>
-          </div>
-
-          {/* Method tabs */}
-          <div className="flex items-center gap-1 mb-4 border-b border-line">
-            <MethodTab active={method === 'password'} onClick={() => setMethod('password')}>
-              <LogIn size={12} /> อีเมล + รหัสผ่าน
-            </MethodTab>
-            <MethodTab active={method === 'token'} onClick={() => setMethod('token')}>
-              <Plug size={12} /> Sanctum Token
-            </MethodTab>
           </div>
 
           {/* Shared Base URL */}
@@ -184,20 +170,12 @@ export default function LoginPage() {
             </div>
           </div>
 
-          {/* Method panels */}
-          {method === 'password' ? (
-            <PasswordLoginPanel
-              baseUrl={baseUrl}
-              onSuccess={(user) => setFlash({ tone: 'ok', msg: `เข้าสู่ระบบสำเร็จ — สวัสดี ${user.name}` })}
-              onError={(msg) => setFlash({ tone: 'crit', msg })}
-            />
-          ) : (
-            <TokenPairPanel
-              baseUrl={baseUrl}
-              onSuccess={(user) => setFlash({ tone: 'ok', msg: `เชื่อมต่อสำเร็จ — สวัสดี ${user.name}` })}
-              onError={(msg) => setFlash({ tone: 'crit', msg })}
-            />
-          )}
+          {/* Admin email + password (only allowed path at the front door) */}
+          <PasswordLoginPanel
+            baseUrl={baseUrl}
+            onSuccess={(user) => setFlash({ tone: 'ok', msg: `เข้าสู่ระบบสำเร็จ — สวัสดี ${user.name}` })}
+            onError={(msg) => setFlash({ tone: 'crit', msg })}
+          />
 
           {flash && (
             <div
@@ -213,11 +191,11 @@ export default function LoginPage() {
           )}
 
           <div className="mt-6 pt-4 border-t border-line text-2xs text-mute leading-relaxed">
-            <div className="mb-1">💡 <b>เคล็ดลับ:</b></div>
+            <div className="mb-1">🛡 <b>ความปลอดภัย:</b></div>
             <ul className="list-disc list-inside space-y-0.5">
-              <li>Base URL ต้องลงท้ายด้วย <code className="mono text-fg">/api/admin</code></li>
-              <li>ฝั่ง thaiprompt ต้องเปิด CORS ให้ origin ของ warroom (ดู <code className="mono">config/cors.php</code>)</li>
-              <li>หรือออก token ผ่าน <code className="mono text-fg">tinker</code>: <code className="mono">{`User::find(id)->createToken('warroom', ['admin'])->plainTextToken`}</code></li>
+              <li>Login ที่นี่ต้องเป็น admin role เท่านั้น — ผู้ใช้ทั่วไป login ไม่ผ่าน</li>
+              <li>เปิด 2FA ในแอด admin web ถ้ายังไม่ได้เปิด — warroom รองรับ OTP 6 หลัก</li>
+              <li>หากไม่ได้ใช้งานนาน ระบบจะตัด session อัตโนมัติ (token หมดอายุฝั่ง backend)</li>
             </ul>
           </div>
         </div>
@@ -252,23 +230,6 @@ export default function LoginPage() {
 }
 
 // ─────────────────────────── Sub-components ───────────────────────────
-
-function MethodTab({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        'flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs border-b-2 transition',
-        active
-          ? 'border-mystic text-fg bg-mystic/5'
-          : 'border-transparent text-mute hover:text-fg',
-      )}
-    >
-      {children}
-    </button>
-  );
-}
 
 function PasswordLoginPanel({
   baseUrl,
@@ -425,75 +386,3 @@ function PasswordLoginPanel({
   );
 }
 
-function TokenPairPanel({
-  baseUrl,
-  onSuccess,
-  onError,
-}: {
-  baseUrl: string;
-  onSuccess: (user: PairUser) => void;
-  onError: (msg: string) => void;
-}) {
-  const [token, setToken] = useState('');
-  const [showToken, setShowToken] = useState(false);
-  const [busy, setBusy] = useState(false);
-
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (busy) return;
-    setBusy(true);
-    try {
-      const res = await pairConnection({ baseUrl, token });
-      if (res.ok) {
-        setToken('');
-        onSuccess(res.user);
-      } else {
-        onError(res.error);
-      }
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <form onSubmit={onSubmit} className="space-y-3">
-      <div>
-        <div className="flex items-center justify-between mb-1">
-          <label className="text-2xs text-mute">API Token (Sanctum)</label>
-          <button
-            type="button"
-            onClick={() => setShowToken((v) => !v)}
-            className="text-2xs text-dim hover:text-fg inline-flex items-center gap-1"
-            tabIndex={-1}
-          >
-            {showToken ? <EyeOff size={10} /> : <Eye size={10} />}
-            {showToken ? 'ซ่อน' : 'แสดง'}
-          </button>
-        </div>
-        <input
-          type={showToken ? 'text' : 'password'}
-          value={token}
-          onChange={(e) => setToken(e.target.value)}
-          placeholder="1|XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
-          spellCheck={false}
-          autoComplete="off"
-          className="w-full px-3 py-2 text-xs mono"
-          disabled={busy}
-          required
-        />
-        <div className="text-2xs text-mute mt-1">
-          ออก token ผ่าน <code className="mono text-fg">tinker</code> หรือสแกน QR pair_code จากแอด admin
-        </div>
-      </div>
-
-      <button
-        type="submit"
-        disabled={busy || !baseUrl || !token}
-        className="btn btn-primary w-full justify-center"
-      >
-        <Plug size={12} />
-        {busy ? 'กำลังเชื่อมต่อ...' : 'เชื่อมต่อด้วย Token'}
-      </button>
-    </form>
-  );
-}
