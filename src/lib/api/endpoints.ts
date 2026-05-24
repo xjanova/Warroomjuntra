@@ -162,6 +162,10 @@ export type ReadingTranscriptMessage = {
   ts: string | null;
   by?: string | null;
   ai?: string | null;
+  // 📸 (2026-05-24) Customer-sent image (slip or fortune photo). Server
+  //   attaches this to a user-role message; the warroom /chat renders a
+  //   thumbnail bubble alongside the text label.
+  image_url?: string | null;
 };
 
 export async function fetchReadingTranscript(id: string | number) {

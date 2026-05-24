@@ -9,7 +9,7 @@ import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { Switch } from '@/components/ui/Switch';
 import { Kbd } from '@/components/ui/Kbd';
 import { useWarroom } from '@/lib/stores/warroom';
-import { useFortuneFeed, sendChatMessage, suggestChatReply, fetchReadingTranscript, fetchFortuneWorkersQueue, fetchBanStatus, banUser, unbanUser, useAdminData, describeError, type ReadingTranscriptMessage, type FortuneWorkersQueue, type WorkerCallRow, type BanStatusResponse } from '@/lib/api';
+import { useFortuneFeed, sendChatMessage, suggestChatReply, fetchReadingTranscript, fetchFortuneWorkersQueue, fetchBanStatus, banUser, unbanUser, markReadingPaid, useAdminData, describeError, type ReadingTranscriptMessage, type FortuneWorkersQueue, type WorkerCallRow, type BanStatusResponse } from '@/lib/api';
 import { useSettings, isPaired as isPairedFn } from '@/lib/stores/settings';
 import { readingToChatThread } from '@/lib/adapters/chat';
 import { cn } from '@/lib/utils';
@@ -114,30 +114,27 @@ function ChatPageInner() {
     return m ? Number(m[1]) : null;
   };
 
-  // Transcript fetch — only when the active thread is a real (paired) reading.
-  // Cached in state keyed by reading id so switching back doesn't re-fetch.
-  const [transcripts, setTranscripts] = useState<Record<number, ReadingTranscriptMessage[]>>({});
-  const [transcriptLoading, setTranscriptLoading] = useState<number | null>(null);
-  useEffect(() => {
-    if (!paired) return;
-    const rid = readingIdOf(activeId);
-    if (!rid) return;
-    if (transcripts[rid]) return;
-    setTranscriptLoading(rid);
-    let cancelled = false;
-    fetchReadingTranscript(rid)
-      .then((r) => {
-        if (cancelled) return;
-        setTranscripts((m) => ({ ...m, [rid]: r.messages ?? [] }));
-      })
-      .catch(() => {/* fallback to thread-embedded messages */})
-      .finally(() => {
-        if (!cancelled) setTranscriptLoading((id) => (id === rid ? null : id));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeId, paired, transcripts]);
+  // 🔄 (2026-05-24) Transcript polling — replaces the prior one-shot fetch
+  //   that never updated. Polls every 3s while a real reading is active so:
+  //     • customer replies show up in our chat without a manual refresh
+  //     • admin messages we just sent appear in OUR pane (not just customer's)
+  //   Key includes the reading id so each thread has its own cache slot;
+  //   switching back doesn't lose history. intervalOverride=0 + pause when
+  //   not paired / not a real reading so the timer doesn't burn API calls.
+  const activeReadingId = readingIdOf(activeId);
+  const transcriptFeed = useAdminData<{ messages: ReadingTranscriptMessage[] } | null>({
+    key: activeReadingId ? `transcript-${activeReadingId}` : 'transcript-none',
+    fetcher: async () => {
+      if (!activeReadingId) return null;
+      const r = await fetchReadingTranscript(activeReadingId);
+      return { messages: r.messages ?? [] };
+    },
+    mock: null,
+    intervalOverride: activeReadingId ? 3 : 0,
+    pauseAutoRefresh: !activeReadingId,
+  });
+  const transcriptLoading = transcriptFeed.isLoading && !transcriptFeed.data ? activeReadingId : null;
+  const transcriptMessages = transcriptFeed.data?.messages ?? null;
 
   const filtered = useMemo(
     () =>
@@ -211,6 +208,38 @@ function ChatPageInner() {
 
   const currentBan = active?.psid ? banStatus[active.psid] ?? null : null;
 
+  // 💸 (2026-05-24) Quick-approve modal — operator marks an unpaid reading
+  //   as paid (39฿ Deep / 99฿ Celtic) which kicks off the fortune-telling
+  //   flow on the backend (ProcessDeepFortuneReadingJob or Celtic handler).
+  //   Replaces the prior "open admin web wallet" detour. Only visible when
+  //   the thread is a real reading and not yet paid.
+  const [approveOpen, setApproveOpen] = useState(false);
+  const [approving, setApproving] = useState(false);
+
+  const performApprove = async (amount: 39 | 99) => {
+    if (!active || approving) return;
+    const rid = readingIdOf(active.id);
+    if (!rid) return;
+    setApproving(true);
+    try {
+      await markReadingPaid(rid, { amount, note: `warroom_chat_approve_${amount}` });
+      pushToast({
+        kind: 'ok',
+        title: `✓ อนุมัติ ฿${amount} → ${active.name}`,
+        body: amount === 39 ? 'ส่งคำทำนาย Deep ให้แล้ว' : 'เริ่ม Celtic Cross flow แล้ว',
+      });
+      setApproveOpen(false);
+      // Pull fresh data so the header switches to "ชำระแล้ว" + transcript
+      // shows the "✓ รับชำระ" system line + (eventually) the AI reply.
+      void transcriptFeed.refetch?.();
+      feed.refetch?.();
+    } catch (e) {
+      pushToast({ kind: 'crit', title: 'อนุมัติชำระไม่สำเร็จ', body: describeError(e) });
+    } finally {
+      setApproving(false);
+    }
+  };
+
   const performBan = async (minutes: number | null, reason: string) => {
     if (!active || banLoading) return;
     const platform: 'facebook' | 'line' = active.channel === 'LINE' ? 'line' : 'facebook';
@@ -283,6 +312,12 @@ function ChatPageInner() {
       if (res.delivered) {
         pushToast({ kind: 'ok', title: '✓ ส่งแล้ว → ' + active.name, body: v.slice(0, 60) });
         setDraft('');
+        // 🔄 (2026-05-24) Pull the fresh transcript NOW so our message lands
+        //   in our own pane without waiting for the next 3s poll tick.
+        //   Previously only feed.refetch() ran → admin saw nothing in their
+        //   own chat until they switched threads. feed.refetch also stays
+        //   so the side-list "last message" preview updates.
+        void transcriptFeed.refetch?.();
         feed.refetch?.();
       } else {
         pushToast({ kind: 'warn', title: 'ส่งไม่ผ่าน platform', body: 'FB/LINE ปฏิเสธ — ลองอีกครั้ง' });
@@ -433,6 +468,18 @@ function ChatPageInner() {
                   ↪ คืนงานให้บอท
                 </button>
               )}
+              {/* 💸 (2026-05-24) Quick-approve — mark paid + trigger fortune flow.
+                  Only shown when this is a real reading and not yet paid. */}
+              {paired && active.isPaid === false && readingIdOf(active.id) && (
+                <button
+                  onClick={() => setApproveOpen(true)}
+                  className="btn btn-ok"
+                  title="อนุมัติชำระเงิน → ส่งคำทำนายให้ลูกค้าทันที"
+                  disabled={approving}
+                >
+                  {approving ? '⏳ กำลังอนุมัติ...' : '✓ อนุมัติชำระ'}
+                </button>
+              )}
               {/* 🚫 (2026-05-24) Quick-ban — same pattern as admin /takeover */}
               {!currentBan?.is_banned && (
                 <button
@@ -449,11 +496,11 @@ function ChatPageInner() {
             <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3 min-h-0 scanline">
               {(() => {
                 // If we have a fetched server transcript, render that (real Q+A
-                // + admin replies from fortune_admin_qa). Otherwise fall back
-                // to the messages we synthesized from the reading row.
-                const rid = readingIdOf(active.id);
-                const live = rid && transcripts[rid];
-                const isLoading = rid && transcriptLoading === rid && !live;
+                // + admin replies from fortune_admin_qa + customer image bubbles).
+                // Otherwise fall back to the messages we synthesized from the
+                // reading row (mock or first-paint before the poll resolves).
+                const live = transcriptMessages;
+                const isLoading = transcriptLoading != null && !live;
                 const rendered = live
                   ? live.map((m) => ({
                       id: m.id,
@@ -462,6 +509,7 @@ function ChatPageInner() {
                       ts: m.ts ? m.ts.slice(11, 16) : '',
                       by: m.by ?? undefined,
                       ai: m.ai ?? undefined,
+                      image_url: m.image_url ?? undefined,
                     }))
                   : active.messages;
                 if (isLoading && rendered.length === 0) {
@@ -481,6 +529,24 @@ function ChatPageInner() {
                     return (
                       <div key={m.id} className="flex gap-2 max-w-[80%]">
                         <div className="bg-rowhi border border-line rounded-lg rounded-tl-sm px-3 py-2 text-sm">
+                          {/* 📸 (2026-05-24) Customer-sent image (slip/photo) */}
+                          {m.image_url && (
+                            <a
+                              href={m.image_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="block mb-1.5 -mx-1 -mt-1"
+                              title="คลิกเปิดภาพเต็มในแท็บใหม่"
+                            >
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={m.image_url}
+                                alt="ลูกค้าส่งภาพ"
+                                className="max-w-[240px] max-h-[360px] rounded border border-line object-cover hover:border-info/60 transition-colors"
+                                loading="lazy"
+                              />
+                            </a>
+                          )}
                           <div className="whitespace-pre-wrap break-words">{m.text}</div>
                           <div className="text-2xs text-mute mono mt-1">{m.ts}</div>
                         </div>
@@ -761,6 +827,19 @@ function ChatPageInner() {
           onConfirm={(minutes, reason) => performBan(minutes, reason)}
         />
       )}
+
+      {/* 💸 (2026-05-24) Quick-approve modal — Deep 39฿ / Celtic 99฿.
+          mark-paid → backend triggers ProcessDeepFortuneReadingJob (or Celtic
+          handler), so the customer receives their reading right after this. */}
+      {active && approveOpen && (
+        <ApproveModal
+          customerName={active.name}
+          due={active.due}
+          loading={approving}
+          onClose={() => setApproveOpen(false)}
+          onConfirm={(amount) => performApprove(amount)}
+        />
+      )}
     </div>
   );
 }
@@ -909,6 +988,102 @@ function BanModal({
             className="btn btn-primary flex-1 justify-center bg-rose-600 hover:bg-rose-500 border-rose-600"
           >
             {loading ? 'กำลังแบน...' : `🚫 แบน ${chosen.label}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// 💸 (2026-05-24) Approve-payment modal. Two presets only (Deep 39 / Celtic 99)
+// because those are the only live SKUs — adding a custom-amount input was
+// declined by the user; if a third tier ships, add another preset here.
+function ApproveModal({
+  customerName,
+  due,
+  loading,
+  onClose,
+  onConfirm,
+}: {
+  customerName: string;
+  due: number;
+  loading: boolean;
+  onClose: () => void;
+  onConfirm: (amount: 39 | 99) => void;
+}) {
+  // Pre-select based on the customer's outstanding bill so one click commits.
+  // Falls through to 39 when due is 0 (fresh thread, no tier picked yet).
+  const presetFromDue: 39 | 99 = due >= 99 ? 99 : 39;
+  const [selected, setSelected] = useState<39 | 99>(presetFromDue);
+
+  const presets: Array<{ amount: 39 | 99; label: string; tier: string; tone: 'info' | 'mystic' }> = [
+    { amount: 39, label: '฿39', tier: 'Deep · ทำนายเชิงลึก 2 ข้อ', tone: 'info' },
+    { amount: 99, label: '฿99', tier: 'Celtic Cross · 10 ใบ + 3 คำถาม', tone: 'mystic' },
+  ];
+
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-black/60 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="panel w-[460px] max-w-[92vw] p-4 border border-ok/40"
+        onClick={(e) => e.stopPropagation()}
+        style={{ boxShadow: '0 0 32px rgba(16,185,129,0.20)' }}
+      >
+        <div className="flex items-start gap-3 mb-3">
+          <div className="text-2xl">💸</div>
+          <div className="flex-1">
+            <div className="text-base font-semibold text-fg">อนุมัติชำระ {customerName}</div>
+            <div className="text-2xs text-mute mt-0.5">
+              เมื่อกดอนุมัติ ระบบจะมาร์คบิลและส่งคำทำนายให้ลูกค้าทันที
+              {due > 0 && (
+                <>
+                  {' · '}
+                  <span className="text-warn">ยอดในบิล ฿{due.toLocaleString()}</span>
+                </>
+              )}
+            </div>
+          </div>
+          <button onClick={onClose} className="btn btn-ghost text-mute" title="ปิด">
+            ✕
+          </button>
+        </div>
+
+        <div className="text-2xs text-mute mb-1.5">เลือกแพคเกจ</div>
+        <div className="grid grid-cols-2 gap-2 mb-3">
+          {presets.map((p) => {
+            const isSel = p.amount === selected;
+            return (
+              <button
+                key={p.amount}
+                onClick={() => setSelected(p.amount)}
+                className={cn(
+                  'px-3 py-2.5 rounded border text-left transition-colors',
+                  isSel
+                    ? p.tone === 'mystic'
+                      ? 'bg-mystic/15 border-mystic/60 text-mystic'
+                      : 'bg-info/12 border-info/70 text-info'
+                    : 'border-line text-dim hover:border-line/80',
+                )}
+              >
+                <div className="text-base font-bold mono">{p.label}</div>
+                <div className="text-2xs opacity-80 mt-0.5">{p.tier}</div>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button onClick={onClose} className="btn btn-ghost flex-1 justify-center">
+            ยกเลิก
+          </button>
+          <button
+            onClick={() => onConfirm(selected)}
+            disabled={loading}
+            className="btn btn-ok flex-1 justify-center"
+          >
+            {loading ? 'กำลังอนุมัติ...' : `✓ อนุมัติ ฿${selected}`}
           </button>
         </div>
       </div>

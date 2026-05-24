@@ -55,6 +55,7 @@ export function readingToChatThread(r: FortuneReading): ChatThread {
     ltv,
     readings: 1,
     due: r.is_paid ? 0 : Math.round(r.amount_paid || 0),
+    isPaid: r.is_paid,
     takenBy: bot ? undefined : { initial: 'AD', color: '#22d3ee' },
     takenByName: bot ? undefined : 'admin',
     takenAt: r.responded_at ? formatTime(r.responded_at) : undefined,

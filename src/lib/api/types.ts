@@ -74,6 +74,9 @@ export type FortuneReading = {
   reading_type: 'basic' | 'deep' | string;
   ai_response: string | null;
   reading_image_url: string | null;
+  // 📸 (2026-05-24) Customer-sent image — payment slip or fortune-question
+  //   picture. Surfaced as an image bubble in /chat transcript.
+  user_image_url: string | null;
   is_paid: boolean;
   amount_paid: number;
   paid_at: Iso8601 | null;

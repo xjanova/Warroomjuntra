@@ -7,6 +7,9 @@ export type ChatMessage = {
   text: string;
   ai?: string;
   by?: string;
+  // 📸 (2026-05-24) Customer-sent image (slip/photo). Rendered as a
+  //   thumbnail in the user bubble when present.
+  image_url?: string | null;
 };
 
 export type ChatThread = {
@@ -34,6 +37,10 @@ export type ChatThread = {
   ltv: number;
   readings: number;
   due: number;
+  // 💸 (2026-05-24) Payment state — drives the "✓ อนุมัติ 39/99" header
+  //   button visibility. Mock threads default to true so the button doesn't
+  //   flash on dev fixtures.
+  isPaid?: boolean;
   messages: ChatMessage[];
 };
 
