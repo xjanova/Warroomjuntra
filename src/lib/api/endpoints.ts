@@ -720,6 +720,14 @@ export type WorkerCallRow = {
   created_at: string;
   age_seconds?: number;
   error_message?: string | null;
+  // 🪪 (2026-05-24) Customer identity attached at AI-call time so /workers can
+  // deep-link to /chat?id=r-{reading_id} and /chat can render "ตอบโดย {worker}".
+  // Nullable: present only when the call had a known customer (FB DM, paid
+  // reading, Juntra chat). Eve/playground/cron calls leave these null.
+  reading_id?: number | null;
+  user_id?: number | null;
+  fb_user_id?: string | null;
+  customer_name?: string | null;
 };
 
 export type CommentDmRow = {
@@ -731,6 +739,12 @@ export type CommentDmRow = {
   comment_reply: string;
   dm_message: string;
   engaged_at: string;
+  // 🪪 (2026-05-24) Identity resolved server-side from the latest
+  // fortune_readings row matching this PSID. Lets the card show the
+  // customer name after the PSID and deep-link to /chat.
+  customer_name?: string | null;
+  reading_id?: number | null;
+  user_id?: number | null;
 };
 
 export type ProviderSplitRow = {

@@ -1,20 +1,32 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { CHAT_TEMPLATES, CHAT_THREADS, type ChatThread } from '@/lib/mock/chat-page';
 import { ChannelChip, Pill } from '@/components/ui/Pill';
 import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { Switch } from '@/components/ui/Switch';
 import { Kbd } from '@/components/ui/Kbd';
 import { useWarroom } from '@/lib/stores/warroom';
-import { useFortuneFeed, sendChatMessage, suggestChatReply, fetchReadingTranscript, describeError, type ReadingTranscriptMessage } from '@/lib/api';
+import { useFortuneFeed, sendChatMessage, suggestChatReply, fetchReadingTranscript, fetchFortuneWorkersQueue, useAdminData, describeError, type ReadingTranscriptMessage, type FortuneWorkersQueue, type WorkerCallRow } from '@/lib/api';
 import { useSettings, isPaired as isPairedFn } from '@/lib/stores/settings';
 import { readingToChatThread } from '@/lib/adapters/chat';
 import { cn } from '@/lib/utils';
 
 const SENTIMENT_30D = 'oo+oo-oo+o-oo+';
 
+// Static-export builds require useSearchParams() to be inside a Suspense
+// boundary so the CSR-bailout has somewhere to fall through.
 export default function ChatPage() {
+  return (
+    <Suspense fallback={<div className="grid h-full place-items-center text-mute text-sm">กำลังโหลดแชต...</div>}>
+      <ChatPageInner />
+    </Suspense>
+  );
+}
+
+function ChatPageInner() {
   const feed = useFortuneFeed();
   const threads = useMemo<ChatThread[]>(() => {
     // Paired = real, even when empty (operator must see the actual queue,
@@ -28,17 +40,66 @@ export default function ChatPage() {
   const [filter, setFilter] = useState('');
   const [channelFilter, setChannelFilter] = useState('');
   const [onlyAdmin, setOnlyAdmin] = useState(false);
-  const [activeId, setActiveId] = useState<string>(threads[0]?.id ?? '');
+
+  // 🪪 (2026-05-24) Deep-link target from /workers → /chat?thread=r-{id}|fb-{psid}
+  //   Read once on mount + whenever it changes. Falls through to the first
+  //   thread when missing or unresolvable so the page still renders.
+  const searchParams = useSearchParams();
+  const deepThreadParam = searchParams?.get('thread') ?? '';
+
+  // Resolve `r-{id}` directly. For `fb-{psid}` find a thread whose psid matches.
+  const resolveDeepThread = (param: string, list: ChatThread[]): string | null => {
+    if (!param) return null;
+    if (param.startsWith('r-')) return list.find((t) => t.id === param)?.id ?? null;
+    if (param.startsWith('fb-')) {
+      const psid = param.slice(3);
+      return list.find((t) => t.psid === psid)?.id ?? null;
+    }
+    return list.find((t) => t.id === param)?.id ?? null;
+  };
+
+  const [activeId, setActiveId] = useState<string>(() =>
+    resolveDeepThread(deepThreadParam, threads) ?? threads[0]?.id ?? '',
+  );
   const [bot, setBot] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(threads.map((c) => [c.id, c.bot])),
   );
-  // Reset active + bot map when the thread list changes (mock → live, or refetch).
+  // Track which deepThreadParam we already honored so subsequent thread-list
+  // refreshes don't snap activeId back to it (which would override the
+  // operator's manual clicks every poll tick).
+  const consumedDeepParam = useRef<string>(deepThreadParam);
+  // Reset bot map when the thread list changes (mock → live, or refetch).
+  // Only re-resolve the deep-link when the URL param itself changes — or when
+  // the previously-unresolvable param finally matches a thread that just
+  // appeared in the live feed.
   useEffect(() => {
     setBot(Object.fromEntries(threads.map((c) => [c.id, c.bot])));
+    const paramChanged = deepThreadParam !== consumedDeepParam.current;
+    if (paramChanged) {
+      const fromUrl = resolveDeepThread(deepThreadParam, threads);
+      if (fromUrl) {
+        setActiveId(fromUrl);
+        consumedDeepParam.current = deepThreadParam;
+        return;
+      }
+    }
     if (!threads.find((c) => c.id === activeId)) {
       setActiveId(threads[0]?.id ?? '');
     }
-  }, [threads, activeId]);
+    // resolveDeepThread is referentially stable (pure local helper)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threads, activeId, deepThreadParam]);
+
+  // 🪪 (2026-05-24) Realtime worker activity for the currently-open thread.
+  //   Polls /fortune/workers/queue every 3s (same cadence as the workers page)
+  //   and filters in_flight + 24h log down to calls whose reading_id matches
+  //   the active thread. Header pill shows the freshest one as "ตอบโดย {model}".
+  const workersFeed = useAdminData<FortuneWorkersQueue | null>({
+    key: 'fortune-workers-queue', // shared cache key — workers page + chat page coalesce
+    fetcher: () => fetchFortuneWorkersQueue(),
+    mock: null,
+    intervalOverride: 3,
+  });
 
   const [draft, setDraft] = useState('');
   const [aiSuggest, setAiSuggest] = useState('');
@@ -90,6 +151,32 @@ export default function ChatPage() {
   );
 
   const active = threads.find((c) => c.id === activeId);
+
+  // 🪪 (2026-05-24) Find the live AI worker handling THIS thread right now.
+  //   Match by reading_id first (most precise), then by fb_user_id (when the
+  //   reading hasn't been written yet — pre-backfill window).
+  //   Prefer in_flight (last 30s), then the freshest entry from the 24h log
+  //   so a recently-finished call still shows ("เพิ่งตอบโดย gemini").
+  const activeWorker: WorkerCallRow | null = useMemo(() => {
+    if (!active) return null;
+    const q = workersFeed.data;
+    if (!q) return null;
+    const rid = readingIdOf(active.id);
+    const psid = active.psid;
+    const matches = (r: WorkerCallRow) => {
+      // Defensive Number() cast — some Laravel serializers ship BIGINT as
+      // string. We type as number|null but the wire format can drift.
+      if (rid && r.reading_id != null && Number(r.reading_id) === rid) return true;
+      if (psid && r.fb_user_id && String(r.fb_user_id) === psid) return true;
+      return false;
+    };
+    const fromInFlight = q.in_flight.find(matches);
+    if (fromInFlight) return fromInFlight;
+    return q.recent_completed.find(matches) ?? null;
+  }, [active, workersFeed.data]);
+
+  // "In-flight" = call landed in the last 30s. Drives the typing-dots animation.
+  const workerIsLive = !!activeWorker && (activeWorker.age_seconds ?? 999) <= 30;
 
   const sendDraft = async () => {
     const v = draft.trim();
@@ -224,11 +311,12 @@ export default function ChatPage() {
             <header className="px-4 py-2 border-b border-line bg-panel2/40 flex items-center gap-3">
               <div className="w-9 h-9 rounded-full bg-mystic/20 border border-mystic/50 grid place-items-center text-lg">🔮</div>
               <div className="flex-1">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-sm font-semibold text-fg">{active.name}</span>
                   <ChannelChip channel={active.channel === 'LINE' ? 'line' : 'fb'} />
                   {active.vip && <Pill tone="warn">VIP</Pill>}
                   <Pill tone="mystic">{active.rarity}</Pill>
+                  {activeWorker && <ActiveWorkerBadge w={activeWorker} live={workerIsLive} />}
                 </div>
                 <div className="text-2xs text-mute mono mt-0.5">
                   PSID {active.psid} · เปิดสนทนา {active.openedAt}
@@ -561,4 +649,44 @@ export default function ChatPage() {
       )}
     </div>
   );
+}
+
+// 🪪 (2026-05-24) Live AI worker pill shown in the chat header — same data
+//   the /workers page reads, so operator sees "ตอบโดย groq/llama-3.3 · 4s"
+//   in realtime while the bot is generating, and "เพิ่งตอบโดย ..." right
+//   after. Clicking jumps to /workers for the full activity log.
+function ActiveWorkerBadge({ w, live }: { w: WorkerCallRow; live: boolean }) {
+  const color = providerColorForBadge(w.provider);
+  const age = w.age_seconds ?? 0;
+  const label = live ? 'ตอบโดย' : 'เพิ่งตอบโดย';
+  return (
+    <Link
+      href="/workers"
+      className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-2xs no-underline transition-colors"
+      style={{
+        background: live ? `${color}1a` : 'rgba(75,85,99,0.15)',
+        border: `1px solid ${live ? color + '66' : 'rgba(75,85,99,0.4)'}`,
+        boxShadow: live ? `0 0 8px ${color}44` : 'none',
+      }}
+      title={`${label} ${w.provider}/${w.model} · ${age}s ago · ${w.tokens.toLocaleString()} tokens · ${w.latency_ms}ms`}
+    >
+      {live && <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: color, boxShadow: `0 0 4px ${color}` }} />}
+      <span style={{ color: live ? color : '#9ca3af' }}>
+        🤖 {label} <span className="font-semibold">{w.provider}</span>
+      </span>
+      <span className="text-mute mono">· {age}s</span>
+    </Link>
+  );
+}
+
+// Lighter copy of providerColor() local to chat — avoids re-export from workers
+// page. Same palette as /workers so the colors stay consistent across pages.
+function providerColorForBadge(name?: string): string {
+  const m: Record<string, string> = {
+    openai: '#10b981', anthropic: '#d4a747', groq: '#22d3ee',
+    grok: '#e879f9', google: '#8b5cf6', gemini: '#8b5cf6',
+    deepseek: '#f59e0b', qwen: '#f43f5e', meta: '#1877f2', 'meta-local': '#0ea5e9',
+  };
+  if (!name) return '#6b7280';
+  return m[name.toLowerCase()] ?? '#94a3b8';
 }

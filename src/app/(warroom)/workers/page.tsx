@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo } from 'react';
+import Link from 'next/link';
 import { Pill, ChannelChip } from '@/components/ui/Pill';
 import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import {
@@ -11,6 +12,15 @@ import {
   type WorkerCallRow,
   type CommentDmRow,
 } from '@/lib/api';
+
+// 🪪 (2026-05-24) Build the /chat?thread= deep-link target for a worker row.
+// Order: reading_id (real chat thread) → fb_user_id (FB-only customer w/o
+// reading yet) → null (system call, not a customer chat).
+function chatThreadHrefFor(r: { reading_id?: number | null; fb_user_id?: string | null }): string | null {
+  if (r.reading_id) return `/chat?thread=r-${r.reading_id}`;
+  if (r.fb_user_id) return `/chat?thread=fb-${r.fb_user_id}`;
+  return null;
+}
 
 const REFRESH_SEC = 3;
 
@@ -247,8 +257,11 @@ export default function WorkersPage() {
 
 function InFlightCard({ r }: { r: WorkerCallRow }) {
   const color = providerColor(r.provider);
-  return (
-    <div className="panel relative overflow-hidden" style={{ boxShadow: `inset 0 0 0 1px ${color}40, 0 0 16px ${color}22` }}>
+  const href = chatThreadHrefFor(r);
+  const customerLabel = r.customer_name || (r.fb_user_id ? `PSID ${r.fb_user_id}` : null);
+
+  const body = (
+    <>
       <div className="severity-stripe" style={{ background: color }} />
       <div className="flex items-center gap-2 px-3 py-2 border-b border-line">
         <span className="w-2 h-2 rounded-full" style={{ background: color }} />
@@ -259,6 +272,13 @@ function InFlightCard({ r }: { r: WorkerCallRow }) {
       </div>
       <div className="px-3 py-2 text-xs">
         <div className="mono text-fg/90 truncate" title={r.model}>{r.model}</div>
+        {customerLabel && (
+          <div className="mt-1 text-2xs flex items-center gap-1.5 truncate" title={customerLabel}>
+            <span className="text-mute">→</span>
+            <span className="text-mystic font-medium truncate">{customerLabel}</span>
+            {href && <span className="text-info/70 ml-auto shrink-0">เปิดแชต ↗</span>}
+          </div>
+        )}
         <div className="flex items-center gap-2 mt-1 text-2xs text-mute">
           <span className="text-info">{r.request_type}</span>
           <span>·</span>
@@ -271,6 +291,22 @@ function InFlightCard({ r }: { r: WorkerCallRow }) {
           <span className="text-info/80">{r.success ? 'เพิ่งตอบเสร็จ' : 'ล้มเหลว — fallback ไป provider อื่น'}</span>
         </div>
       </div>
+    </>
+  );
+
+  const cardClass = 'panel relative overflow-hidden block no-underline hover:bg-rowhi';
+  const cardStyle = { boxShadow: `inset 0 0 0 1px ${color}40, 0 0 16px ${color}22` };
+
+  if (href) {
+    return (
+      <Link href={href} className={cardClass} style={cardStyle} title={`เปิดแชตของ ${customerLabel ?? 'ลูกค้า'}`}>
+        {body}
+      </Link>
+    );
+  }
+  return (
+    <div className={cardClass} style={cardStyle}>
+      {body}
     </div>
   );
 }
@@ -279,19 +315,15 @@ function CallRow({ a }: { a: WorkerCallRow }) {
   const fail = !a.success;
   const time = a.created_at ? a.created_at.slice(11, 19) : '';
   const color = providerColor(a.provider);
-  // Best-effort link: admin web /admin/ai/usage filtered by this provider + model.
-  // We don't have user_id on the usage log, so we can't link straight to a
-  // specific customer — but the operator can search by model/key from here.
+  // 🪪 (2026-05-24) Prefer linking to the customer's chat — that's what the
+  // operator actually wants when scanning the call log. Fall back to admin
+  // web ai-keys when the call had no known customer (Eve/playground/cron).
+  const chatHref = chatThreadHrefFor(a);
   const adminLogUrl = `https://main.thaiprompt.online/admin/ai/api-keys?search=${encodeURIComponent(a.key_name ?? '')}`;
-  return (
-    <a
-      href={adminLogUrl}
-      target="_blank"
-      rel="noopener noreferrer"
-      className={`block px-3 py-2 border-b border-line/60 text-2xs activity-row no-underline hover:bg-rowhi`}
-      style={{ borderLeft: `2px solid ${fail ? 'rgba(239,68,68,0.5)' : color + '99'}` }}
-      title="คลิกเปิด admin web → ai-keys"
-    >
+  const customerLabel = a.customer_name || (a.fb_user_id ? `PSID ${a.fb_user_id.slice(-8)}` : null);
+
+  const inner = (
+    <>
       <div className="flex items-center gap-1.5 mb-0.5">
         <span className="mono text-mute">{time}</span>
         <span className="w-2 h-2 rounded-full" style={{ background: color }} />
@@ -306,6 +338,9 @@ function CallRow({ a }: { a: WorkerCallRow }) {
         <span className="text-mute group-hover:text-info">↗</span>
       </div>
       <div className="text-mute mono truncate" title={a.model}>{a.model}</div>
+      {customerLabel && (
+        <div className="text-mystic/90 mt-0.5 truncate" title={customerLabel}>→ {customerLabel}</div>
+      )}
       {!fail && (
         <div className="flex items-center gap-2 mt-0.5 text-mute">
           <span className="mono">{a.tokens.toLocaleString()} tokens</span>
@@ -323,6 +358,22 @@ function CallRow({ a }: { a: WorkerCallRow }) {
           to { opacity: 1; transform: translateY(0); background: transparent; }
         }
       `}</style>
+    </>
+  );
+
+  const cls = `block px-3 py-2 border-b border-line/60 text-2xs activity-row no-underline hover:bg-rowhi`;
+  const style = { borderLeft: `2px solid ${fail ? 'rgba(239,68,68,0.5)' : color + '99'}` };
+
+  if (chatHref) {
+    return (
+      <Link href={chatHref} className={cls} style={style} title={`เปิดแชตของ ${customerLabel ?? 'ลูกค้า'}`}>
+        {inner}
+      </Link>
+    );
+  }
+  return (
+    <a href={adminLogUrl} target="_blank" rel="noopener noreferrer" className={cls} style={style} title="คลิกเปิด admin web → ai-keys">
+      {inner}
     </a>
   );
 }
@@ -344,13 +395,24 @@ function CommentDmCard({ d }: { d: CommentDmRow }) {
     : null;
   // Admin web reading lookup by FB user id — closest thing to "open this customer's history".
   const adminUserUrl = `https://main.thaiprompt.online/admin/fortune/readings?search=${encodeURIComponent(d.fb_user_id ?? '')}`;
+  // 🪪 (2026-05-24) Warroom-internal chat deep link — preferred when we have
+  // a reading_id from the server enrichment.
+  const chatHref = chatThreadHrefFor(d);
 
   return (
     <div className="panel p-2.5 text-xs">
       <div className="flex items-center gap-2 mb-1.5">
         <ChannelChip channel="fb" />
         <span className="mono text-2xs text-mute">{ts}</span>
-        <span className="text-fg/90 truncate flex-1">PSID {d.fb_user_id}</span>
+        <span className="text-fg/90 truncate flex-1">
+          <span className="mono text-mute">PSID {d.fb_user_id}</span>
+          {d.customer_name && (
+            <>
+              {' · '}
+              <span className="text-mystic font-medium">{d.customer_name}</span>
+            </>
+          )}
+        </span>
         <span className="mono text-2xs text-mute">post {(d.fb_post_id ?? '').slice(-8)}</span>
       </div>
       {d.comment_text && (
@@ -363,15 +425,24 @@ function CommentDmCard({ d }: { d: CommentDmRow }) {
         <div className="text-info/90 line-clamp-2 mb-1.5">✉ ส่ง DM: {d.dm_message}</div>
       )}
       <div className="flex gap-1 mt-1.5">
+        {chatHref && (
+          <Link
+            href={chatHref}
+            className="btn btn-info text-2xs flex-1 justify-center"
+            title={`เปิดแชตของ ${d.customer_name ?? d.fb_user_id}`}
+          >
+            💬 เปิดแชต
+          </Link>
+        )}
         {commentDeepUrl && (
           <a
             href={commentDeepUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="btn btn-info text-2xs flex-1 justify-center"
+            className="btn text-2xs flex-1 justify-center"
             title="เปิดคอมเม้นต์ในโพสต์ FB"
           >
-            🔗 ดูโพสต์ FB
+            🔗 โพสต์
           </a>
         )}
         {inboxUrl && (
