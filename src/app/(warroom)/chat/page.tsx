@@ -9,7 +9,7 @@ import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { Switch } from '@/components/ui/Switch';
 import { Kbd } from '@/components/ui/Kbd';
 import { useWarroom } from '@/lib/stores/warroom';
-import { useFortuneFeed, sendChatMessage, suggestChatReply, fetchReadingTranscript, fetchFortuneWorkersQueue, useAdminData, describeError, type ReadingTranscriptMessage, type FortuneWorkersQueue, type WorkerCallRow } from '@/lib/api';
+import { useFortuneFeed, sendChatMessage, suggestChatReply, fetchReadingTranscript, fetchFortuneWorkersQueue, fetchBanStatus, banUser, unbanUser, useAdminData, describeError, type ReadingTranscriptMessage, type FortuneWorkersQueue, type WorkerCallRow, type BanStatusResponse } from '@/lib/api';
 import { useSettings, isPaired as isPairedFn } from '@/lib/stores/settings';
 import { readingToChatThread } from '@/lib/adapters/chat';
 import { cn } from '@/lib/utils';
@@ -178,6 +178,93 @@ function ChatPageInner() {
   // "In-flight" = call landed in the last 30s. Drives the typing-dots animation.
   const workerIsLive = !!activeWorker && (activeWorker.age_seconds ?? 999) <= 30;
 
+  // 🚫 (2026-05-24) Ban-status for the active thread. Cached per psid so
+  //   switching back doesn't re-fetch. Refreshed on thread switch + after
+  //   every ban/unban mutation. Shows badge in header + drives the modal
+  //   primary action (ban vs unban).
+  const [banStatus, setBanStatus] = useState<Record<string, BanStatusResponse | null>>({});
+  const [banLoading, setBanLoading] = useState(false);
+  const [banModalOpen, setBanModalOpen] = useState(false);
+
+  // Callers are already responsible for checking `paired` — keeping the
+  // gate here would silently no-op a manual unban if paired hasn't been
+  // recomputed yet (race with settings hydration).
+  const refreshBanStatus = async (thread: ChatThread | undefined) => {
+    if (!thread?.psid) return;
+    const platform: 'facebook' | 'line' = thread.channel === 'LINE' ? 'line' : 'facebook';
+    try {
+      const res = await fetchBanStatus(platform, thread.psid);
+      setBanStatus((m) => ({ ...m, [thread.psid]: res }));
+    } catch {
+      // 401/network — silently keep the previous value
+    }
+  };
+
+  useEffect(() => {
+    if (!paired) return;
+    if (!active?.psid) return;
+    if (banStatus[active.psid] !== undefined) return; // already fetched
+    void refreshBanStatus(active);
+    // refreshBanStatus is stable enough (pure inputs + state setter)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active?.psid, paired]);
+
+  const currentBan = active?.psid ? banStatus[active.psid] ?? null : null;
+
+  const performBan = async (minutes: number | null, reason: string) => {
+    if (!active || banLoading) return;
+    const platform: 'facebook' | 'line' = active.channel === 'LINE' ? 'line' : 'facebook';
+    setBanLoading(true);
+    try {
+      await banUser({
+        platform,
+        platform_user_id: active.psid,
+        display_name: active.name,
+        reason: reason || 'banned_from_warroom_chat',
+        minutes: minutes ?? undefined, // omit → permanent
+      });
+      pushToast({
+        kind: 'ok',
+        title: `🚫 แบน ${active.name} แล้ว`,
+        body: minutes ? `ระยะเวลา ${formatBanDuration(minutes)}` : 'ถาวร',
+      });
+      setBanModalOpen(false);
+      await refreshBanStatus(active);
+    } catch (e) {
+      pushToast({ kind: 'crit', title: 'แบนไม่สำเร็จ', body: describeError(e) });
+    } finally {
+      setBanLoading(false);
+    }
+  };
+
+  const performUnban = async () => {
+    if (!active || banLoading) return;
+    const ban = currentBan?.ban;
+    // Only the /unban response sends id:null. A LIVE ban-status lookup
+    // always carries a real id — narrow the type here for the unbanUser call.
+    if (!ban || ban.id == null) return;
+    const banId = ban.id;
+    const psid = active.psid;
+    // Snapshot for rollback if the server rejects.
+    const prevStatus = banStatus[psid];
+    setBanLoading(true);
+    // Optimistic: clear the badge + show the 🚫 button immediately so the
+    // operator doesn't see a ghost state during the round-trip.
+    setBanStatus((m) => ({ ...m, [psid]: { is_banned: false, ban: null, remaining_seconds: null } }));
+    try {
+      await unbanUser(banId);
+      pushToast({ kind: 'ok', title: `✨ ปลดแบน ${active.name} แล้ว` });
+      // Re-confirm against server in case anything else changed (counter etc.)
+      await refreshBanStatus(active);
+    } catch (e) {
+      // Roll back the optimistic clear so the operator sees the real state.
+      setBanStatus((m) => ({ ...m, [psid]: prevStatus ?? null }));
+      pushToast({ kind: 'crit', title: 'ปลดแบนไม่สำเร็จ', body: describeError(e) });
+    } finally {
+      setBanLoading(false);
+    }
+  };
+
   const sendDraft = async () => {
     const v = draft.trim();
     if (!v || sending) return;
@@ -317,6 +404,9 @@ function ChatPageInner() {
                   {active.vip && <Pill tone="warn">VIP</Pill>}
                   <Pill tone="mystic">{active.rarity}</Pill>
                   {activeWorker && <ActiveWorkerBadge w={activeWorker} live={workerIsLive} />}
+                  {currentBan?.is_banned && currentBan.ban && (
+                    <BanStatusBadge ban={currentBan.ban} remainingSec={currentBan.remaining_seconds} onUnban={() => void performUnban()} loading={banLoading} />
+                  )}
                 </div>
                 <div className="text-2xs text-mute mono mt-0.5">
                   PSID {active.psid} · เปิดสนทนา {active.openedAt}
@@ -341,6 +431,17 @@ function ChatPageInner() {
                   className="btn btn-ok"
                 >
                   ↪ คืนงานให้บอท
+                </button>
+              )}
+              {/* 🚫 (2026-05-24) Quick-ban — same pattern as admin /takeover */}
+              {!currentBan?.is_banned && (
+                <button
+                  onClick={() => setBanModalOpen(true)}
+                  className="btn btn-ghost text-rose-400 hover:bg-rose-500/10 border-rose-500/30"
+                  title="แบนลูกค้านี้ — บอทจะไม่ตอบอีก"
+                  disabled={!paired}
+                >
+                  🚫 แบน
                 </button>
               )}
             </header>
@@ -647,8 +748,189 @@ function ChatPageInner() {
           </div>
         </aside>
       )}
+
+      {/* 🚫 (2026-05-24) Quick-ban modal — preset durations matching the
+          admin /takeover page so the warroom operator gets identical UX. */}
+      {active && banModalOpen && (
+        <BanModal
+          customerName={active.name}
+          psid={active.psid}
+          platform={active.channel === 'LINE' ? 'line' : 'facebook'}
+          loading={banLoading}
+          onClose={() => setBanModalOpen(false)}
+          onConfirm={(minutes, reason) => performBan(minutes, reason)}
+        />
+      )}
     </div>
   );
+}
+
+// 🚫 (2026-05-24) Header pill showing current ban state + inline ปลดแบน.
+function BanStatusBadge({
+  ban,
+  remainingSec,
+  onUnban,
+  loading,
+}: {
+  ban: NonNullable<BanStatusResponse['ban']>;
+  remainingSec: number | null;
+  onUnban: () => void;
+  loading: boolean;
+}) {
+  const label = ban.is_permanent
+    ? 'ติดแบนถาวร'
+    : remainingSec != null
+    ? `ติดแบน · เหลือ ${formatRemaining(remainingSec)}`
+    : 'ติดแบน';
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-2xs"
+      style={{
+        background: 'rgba(244,63,94,0.12)',
+        border: '1px solid rgba(244,63,94,0.5)',
+        boxShadow: '0 0 8px rgba(244,63,94,0.25)',
+      }}
+      title={`เหตุผล: ${ban.reason ?? '—'} · attempts: ${ban.attempt_count}`}
+    >
+      <span className="text-rose-400 font-semibold">🚫 {label}</span>
+      {ban.attempt_count > 0 && (
+        <span className="text-rose-300/80 mono">· {ban.attempt_count} ครั้ง</span>
+      )}
+      <button
+        onClick={onUnban}
+        disabled={loading}
+        className="ml-1 text-rose-200 hover:text-white underline-offset-2 hover:underline disabled:opacity-50"
+        title="ปลดแบน — บอทจะตอบลูกค้าคนนี้อีกครั้ง"
+      >
+        {loading ? '...' : '✨ ปลดแบน'}
+      </button>
+    </span>
+  );
+}
+
+// 🚫 (2026-05-24) Ban confirmation modal. Duration presets mirror the admin
+// /takeover page (10m / 1h / 24h / 7d / permanent). reason is optional.
+function BanModal({
+  customerName,
+  psid,
+  platform,
+  loading,
+  onClose,
+  onConfirm,
+}: {
+  customerName: string;
+  psid: string;
+  platform: 'facebook' | 'line';
+  loading: boolean;
+  onClose: () => void;
+  onConfirm: (minutes: number | null, reason: string) => void;
+}) {
+  const presets: Array<{ key: string; label: string; minutes: number | null }> = [
+    { key: '10m', label: '10 นาที', minutes: 10 },
+    { key: '1h', label: '1 ชั่วโมง', minutes: 60 },
+    { key: '24h', label: '1 วัน', minutes: 1440 },
+    { key: '7d', label: '7 วัน', minutes: 10080 },
+    { key: 'permanent', label: 'ถาวร', minutes: null },
+  ];
+  const [selected, setSelected] = useState<string>('24h');
+  const [reason, setReason] = useState('');
+  const chosen = presets.find((p) => p.key === selected) ?? presets[0];
+
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-black/60 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="panel w-[440px] max-w-[92vw] p-4 border border-rose-500/40"
+        onClick={(e) => e.stopPropagation()}
+        style={{ boxShadow: '0 0 32px rgba(244,63,94,0.18)' }}
+      >
+        <div className="flex items-start gap-3 mb-3">
+          <div className="text-2xl">🚫</div>
+          <div className="flex-1">
+            <div className="text-base font-semibold text-fg">แบน {customerName}</div>
+            <div className="text-2xs text-mute mono mt-0.5">
+              {platform.toUpperCase()} · PSID {psid}
+            </div>
+          </div>
+          <button onClick={onClose} className="btn btn-ghost text-mute" title="ปิด">
+            ✕
+          </button>
+        </div>
+
+        <div className="text-2xs text-mute mb-1.5">ระยะเวลา</div>
+        <div className="grid grid-cols-5 gap-1.5 mb-3">
+          {presets.map((p) => {
+            const isSel = p.key === selected;
+            const isPerm = p.minutes === null;
+            return (
+              <button
+                key={p.key}
+                onClick={() => setSelected(p.key)}
+                className={cn(
+                  'px-2 py-1.5 text-2xs rounded border transition-colors',
+                  isSel
+                    ? isPerm
+                      ? 'bg-rose-500/20 border-rose-500 text-rose-200 font-semibold'
+                      : 'bg-info/15 border-info/70 text-info font-semibold'
+                    : 'border-line text-dim hover:border-line/80',
+                )}
+              >
+                {p.label}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="text-2xs text-mute mb-1.5">เหตุผล (ไม่บังคับ)</div>
+        <input
+          type="text"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="เช่น สแปม / ใช้คำหยาบ / ขู่รีวิว 1 ดาว"
+          className="w-full px-2 py-1.5 text-xs mb-3"
+          maxLength={500}
+        />
+
+        <div className="flex items-center gap-2">
+          <button onClick={onClose} className="btn btn-ghost flex-1 justify-center">
+            ยกเลิก
+          </button>
+          <button
+            onClick={() => {
+              if (chosen.minutes === null) {
+                // Permanent — extra confirm
+                if (!window.confirm(`ยืนยันแบน ${customerName} แบบ "ถาวร"?\nบอทจะไม่ตอบลูกค้านี้อีกจนกว่าจะปลดแบน`)) return;
+              }
+              onConfirm(chosen.minutes, reason.trim());
+            }}
+            disabled={loading}
+            className="btn btn-primary flex-1 justify-center bg-rose-600 hover:bg-rose-500 border-rose-600"
+          >
+            {loading ? 'กำลังแบน...' : `🚫 แบน ${chosen.label}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function formatRemaining(sec: number): string {
+  if (sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min} นาที`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr} ชม. ${min % 60} นาที`;
+  const d = Math.floor(hr / 24);
+  return `${d} วัน ${hr % 24} ชม.`;
+}
+
+function formatBanDuration(minutes: number): string {
+  if (minutes < 60) return `${minutes} นาที`;
+  if (minutes < 1440) return `${Math.floor(minutes / 60)} ชั่วโมง`;
+  if (minutes < 10080) return `${Math.floor(minutes / 1440)} วัน`;
+  return `${Math.floor(minutes / 10080)} สัปดาห์`;
 }
 
 // 🪪 (2026-05-24) Live AI worker pill shown in the chat header — same data

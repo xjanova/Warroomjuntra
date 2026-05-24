@@ -571,7 +571,10 @@ export type ModerationSuspect = {
 };
 
 export type ModerationBan = {
-  id: number;
+  // Nullable only on /unban response — the row is hard-deleted by
+  // FortuneBanService::unban() and the server sends back null so a client
+  // retry with this id can't accidentally hit a stale row.
+  id: number | null;
   platform: 'facebook' | 'line';
   platform_user_id: string;
   display_name: string | null;
@@ -614,11 +617,22 @@ export async function fetchModerationBanned(params?: {
   }>({ path: `/moderation/banned${qs}` });
 }
 
+/**
+ * Ban a user. Prefer `minutes` (server treats null/omitted as permanent).
+ * `banned_until` is accepted for legacy compat — the server converts it to
+ * minutes internally. **Past timestamps return 422** instead of silently
+ * becoming permanent.
+ *
+ * @deprecated banned_until — pass `minutes` instead. Omit both for permanent.
+ */
 export async function banUser(payload: {
   platform: 'facebook' | 'line';
   platform_user_id: string;
   display_name?: string;
   reason?: string;
+  /** Duration in minutes. Omit (or pass null) for a permanent ban. */
+  minutes?: number | null;
+  /** @deprecated — past timestamps now 422. Use `minutes` instead. */
   banned_until?: string | null;
 }) {
   return apiRequest<{ ban: ModerationBan }>({
@@ -633,6 +647,19 @@ export async function unbanUser(banId: number) {
     method: 'POST',
     path: `/moderation/unban/${banId}`,
   });
+}
+
+// 🪪 (2026-05-24) Single-user ban-status lookup for the warroom /chat header
+// badge. Returns is_banned=true + full ban row, OR is_banned=false + ban=null.
+export type BanStatusResponse = {
+  is_banned: boolean;
+  ban: ModerationBan | null;
+  remaining_seconds: number | null;
+};
+
+export async function fetchBanStatus(platform: 'facebook' | 'line', platformUserId: string) {
+  const qs = toQuery({ platform, platform_user_id: platformUserId });
+  return apiRequest<BanStatusResponse>({ path: `/moderation/ban-status${qs}` });
 }
 
 export async function fetchModerationRules() {
