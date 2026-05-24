@@ -792,6 +792,36 @@ export async function fetchBehaviorTriage(params?: { since_minutes?: number }) {
   }>({ path: `/fortune/triage/behavior${qs}` });
 }
 
+// ---- Eve mission-control signals ------------------------------------------
+
+export type EveSignals = {
+  generated_at: string;
+  fortune: {
+    in_flight: number;
+    stuck_paid: number;
+    unpaid_followups: number;
+    lead_count: number;
+    completed_15m: number;
+    failed_15m: number;
+    triage_crit: number;
+    triage_warn: number;
+    oldest_stuck_paid_min: number | null;
+  };
+  ai_pool: {
+    providers_offline: number;
+    keys_disabled: number;
+    keys_active: number;
+    error_rate_15m_pct: number;
+  };
+  finance: { withdrawals_pending: number; sms_unmatched: number };
+  moderation: { suspects: number; banned_active: number };
+  alert: { crit: number; warn: number; level: 'crit' | 'warn' | 'ok'; headline: string };
+};
+
+export async function fetchEveSignals() {
+  return apiRequest<EveSignals>({ path: '/eve/signals' });
+}
+
 // ---- AI Playground ---------------------------------------------------------
 
 export async function runPlayground(payload: {

@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { usePathname } from 'next/navigation';
 import { useEve, type EveMood } from '@/lib/stores/eve';
-import { useSettings } from '@/lib/stores/settings';
+import { useSettings, isPaired as isPairedFn } from '@/lib/stores/settings';
+import { useAdminData, fetchEveSignals, type EveSignals } from '@/lib/api';
 import { EveAvatar } from './EveAvatar';
 import { EveChatBody } from './EveChatBody';
 
@@ -44,38 +45,75 @@ type ScriptStep = {
   html: string;
 };
 
-const INTRO_SCRIPT: ScriptStep[] = [
-  {
-    mood: 'happy',
-    delay: 600,
-    pauseAfter: 1400,
+/**
+ * Build Eve's intro from live signals. When paired we tell the operator what
+ * we actually see; when not paired we keep a generic welcome.
+ */
+function buildIntroScript(signals: EveSignals | null): ScriptStep[] {
+  const greet: ScriptStep = {
+    mood: 'happy', delay: 600, pauseAfter: 1400,
     html: '<b>สวัสดีค่ะ พี่</b> ✦ Eve รายงานตัว · เป็นผู้ช่วย AI ประจำ War Room ของพี่นะคะ',
-  },
-  {
-    mood: 'talking',
+  };
+
+  if (!signals) {
+    return [
+      greet,
+      { mood: 'idle', delay: 300, pauseAfter: 0,
+        html: 'มีอะไรให้ Eve ช่วยมั้ยคะ? ลองพิมพ์คำสั่ง หรือกดปุ่มลัดด้านล่างได้เลยค่ะ ✨' },
+    ];
+  }
+
+  const f = signals.fortune;
+  const a = signals.ai_pool;
+  const isCrit = signals.alert.level === 'crit';
+  const status: ScriptStep = {
+    mood: isCrit ? 'concerned' : 'talking',
     delay: 300,
     pauseAfter: 1800,
-    html: 'ตอนนี้สังเกตเห็น <b class="lnk" data-action="open-crit">3 เคสวิกฤต</b> ค้างคิวอยู่ค่ะ — เด่นสุดคือยอดโอน ฿2,500 ของคุณพิมพ์ชนกที่ไม่ตรงบิล',
-  },
-  {
-    mood: 'concerned',
-    delay: 400,
-    pauseAfter: 1600,
-    html: '<b>กังวลนิดนึง</b> ค่ะ คุณวรากรกำลังพิมพ์ขู่ขอคืนเงินใน FB · mood ระดับ 5 น่าจะรีบทักก่อนเสียลูกค้า',
-  },
-  {
-    mood: 'idle',
-    delay: 300,
-    pauseAfter: 0,
+    html: 'รายงานสด: ' + signals.alert.headline,
+  };
+
+  const detail: ScriptStep[] = [];
+  if (f.stuck_paid > 0) {
+    const oldest = f.oldest_stuck_paid_min ? ` (เก่าสุด ${f.oldest_stuck_paid_min} นาที)` : '';
+    detail.push({
+      mood: 'concerned', delay: 400, pauseAfter: 1400,
+      html: `💰 <b>${f.stuck_paid} รายจ่ายแล้วยังไม่ได้คำทำนาย</b>${oldest} — ควรรีบส่ง`,
+    });
+  }
+  if (f.lead_count > 0) {
+    detail.push({
+      mood: 'thinking', delay: 300, pauseAfter: 1400,
+      html: `🎯 มี <b>${f.lead_count} ลีดสด</b> (เริ่มดูดวงแต่ยังไม่จ่าย) — ทักด้วย QR ราคา จะปิดได้`,
+    });
+  }
+  if (a.providers_offline > 0) {
+    detail.push({
+      mood: 'concerned', delay: 300, pauseAfter: 1400,
+      html: `🔌 <b>${a.providers_offline} provider offline</b> — error rate ${a.error_rate_15m_pct}% ใน 15 นาที`,
+    });
+  }
+  if (detail.length === 0 && f.completed_15m > 0) {
+    detail.push({
+      mood: 'happy', delay: 300, pauseAfter: 1200,
+      html: `✓ ทุกอย่างปกติ · ตอบไป ${f.completed_15m} ครั้งใน 15 นาทีล่าสุด`,
+    });
+  }
+
+  const tail: ScriptStep = {
+    mood: 'idle', delay: 300, pauseAfter: 0,
     html: 'มีอะไรให้ Eve ช่วยมั้ยคะ? ลองพิมพ์คำสั่ง หรือกดปุ่มลัดด้านล่างได้เลยค่ะ ✨',
-  },
-];
+  };
+
+  return [greet, status, ...detail.slice(0, 2), tail];
+}
 
 const MOODS: EveMood[] = ['idle', 'happy', 'talking', 'thinking', 'concerned', 'surprise'];
 
 export function Eve() {
   const pathname = usePathname();
   const eveEnabled = useSettings((s) => s.eve.enabled);
+  const paired = useSettings((s) => isPairedFn(s));
   const {
     mode, mood,
     eyeY, eyeLX, eyeRX, mouthX, mouthY,
@@ -83,13 +121,59 @@ export function Eve() {
   } = useEve();
   const introPlayed = useRef(false);
 
+  // Live signal feed — Eve reads from this to know what's happening across
+  // the system. Refreshes every 30s so her status badge stays current.
+  const signalsFeed = useAdminData({
+    key: 'eve-signals',
+    fetcher: () => fetchEveSignals(),
+    mock: null as unknown as EveSignals,
+    intervalOverride: 30,
+  });
+  const signals = signalsFeed.source === 'live' ? signalsFeed.data : null;
+
+  // Track which threshold-crossings we've already announced so Eve doesn't
+  // re-narrate the same alert every 30s.
+  const announcedRef = useRef<{ stuck: number; offline: number }>({ stuck: 0, offline: 0 });
+  useEffect(() => {
+    if (!signals) return;
+    const s = signals.fortune.stuck_paid;
+    if (s > announcedRef.current.stuck && s > 0) {
+      announcedRef.current.stuck = s;
+      // Soft proactive nudge — only when expanded, otherwise just pulse mood.
+      if (mode === 'open') {
+        addMessage({
+          role: 'eve',
+          text: `💰 <b>${s} รายจ่ายแล้วยังไม่ได้คำทำนาย</b>${signals.fortune.oldest_stuck_paid_min ? ' (เก่าสุด ' + signals.fortune.oldest_stuck_paid_min + ' นาที)' : ''}`,
+        });
+        setMood('concerned');
+      } else {
+        setMood('concerned');
+      }
+    }
+    const off = signals.ai_pool.providers_offline;
+    if (off > announcedRef.current.offline && off > 0) {
+      announcedRef.current.offline = off;
+      if (mode === 'open') {
+        addMessage({
+          role: 'eve',
+          text: `🔌 <b>${off} provider offline</b> — error rate ${signals.ai_pool.error_rate_15m_pct}%`,
+        });
+        setMood('concerned');
+      }
+    }
+  }, [signals, mode, addMessage, setMood]);
+
   // Intro script — fire once per session, regardless of which page renders Eve first.
+  // Waits up to ~3s for the first signals tick so the intro is data-aware.
   useEffect(() => {
     if (introPlayed.current) return;
+    // If paired and we haven't loaded signals yet, give it one beat.
+    if (paired && !signals && signalsFeed.source !== 'error') return;
     introPlayed.current = true;
     let cancelled = false;
     let acc = 400;
-    INTRO_SCRIPT.forEach((step) => {
+    const script = buildIntroScript(signals);
+    script.forEach((step) => {
       acc += step.delay;
       const fire = acc;
       setTimeout(() => {
@@ -110,7 +194,7 @@ export function Eve() {
     return () => {
       cancelled = true;
     };
-  }, [setMood, setTyping, addMessage]);
+  }, [setMood, setTyping, addMessage, paired, signals, signalsFeed.source]);
 
   // eve:alert listener — any page can trigger Eve to bounce open + react.
   useEffect(() => {
@@ -147,10 +231,15 @@ export function Eve() {
   const onPointerDown = useCallback((e: React.PointerEvent) => {
     // Only initiate drag on primary button + when we have a starting point.
     if (e.button !== 0) return;
+    const target = e.target as HTMLElement;
+    // Explicit opt-outs: close button / minimize / mood switch / inputs.
+    // Without this the pointer-capture below swallows clicks on those buttons
+    // because the parent .eve-dock claims the pointer first.
+    if (target.closest('[data-no-drag="true"]')) return;
     // Don't capture drags that started on a real interactive child — buttons
     // inside Eve still need to click through. The handle wrapper sets
     // data-drag-handle="true" on the area we accept drags on.
-    const handle = (e.target as HTMLElement).closest('[data-drag-handle="true"]');
+    const handle = target.closest('[data-drag-handle="true"]');
     if (!handle) return;
     dragStateRef.current = {
       startX: e.clientX,
@@ -234,13 +323,24 @@ export function Eve() {
                 Eve <span className="rune">AI · ASSIST</span>
               </span>
               <span className="eve-pill-status">
-                <span className="dot-tiny" /> ออนไลน์ · มีข้อความใหม่
+                <span className="dot-tiny" />{' '}
+                {signals ? signals.alert.headline : 'ออนไลน์ · เฝ้าระบบ'}
               </span>
             </span>
+            {signals && signals.alert.crit > 0 && (
+              <span
+                className="eve-pill-badge"
+                aria-label={`${signals.alert.crit} วิกฤต`}
+                title={signals.alert.headline}
+              >
+                {signals.alert.crit}
+              </span>
+            )}
             <span
               role="button"
               tabIndex={0}
               className="eve-pill-close"
+              data-no-drag="true"
               onClick={(e) => {
                 e.stopPropagation();
                 setMode('hidden');
@@ -286,12 +386,19 @@ export function Eve() {
                   Eve <span className="rune">AI ASSIST</span>
                 </b>
                 <small>
-                  <em>● ฟัง War Room อยู่</em> · v0.7 · qwen-72b
+                  <em>● ฟัง War Room อยู่</em>{' '}
+                  {signals ? (
+                    <span style={{ color: signals.alert.level === 'crit' ? '#fca5a5' : signals.alert.level === 'warn' ? '#fbbf24' : '#34d399' }}>
+                      · {signals.alert.headline}
+                    </span>
+                  ) : (
+                    <span>· v0.7 · qwen-72b</span>
+                  )}
                 </small>
               </div>
               <button
                 type="button"
-                className="eve-head-btn"
+                className="eve-head-btn" data-no-drag="true"
                 title="ปรับตำแหน่งใบหน้า"
                 onClick={() => {
                   const cur = `${eyeY}, ${eyeLX}, ${eyeRX}, ${mouthX}, ${mouthY}`;
@@ -307,10 +414,10 @@ export function Eve() {
               >
                 ⚙
               </button>
-              <button type="button" className="eve-head-btn" title="ย่อ" onClick={() => setMode('min')}>
+              <button type="button" className="eve-head-btn" data-no-drag="true" title="ย่อ" onClick={() => setMode('min')}>
                 —
               </button>
-              <button type="button" className="eve-head-btn" title="ปิด Eve" onClick={() => setMode('hidden')}>
+              <button type="button" className="eve-head-btn" data-no-drag="true" title="ปิด Eve" onClick={() => setMode('hidden')}>
                 ✕
               </button>
             </div>
