@@ -726,6 +726,7 @@ export type CommentDmRow = {
   id: number;
   fb_user_id: string;
   fb_post_id: string;
+  fb_comment_id: string | null;
   comment_text: string;
   comment_reply: string;
   dm_message: string;

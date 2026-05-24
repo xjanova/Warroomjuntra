@@ -279,8 +279,19 @@ function CallRow({ a }: { a: WorkerCallRow }) {
   const fail = !a.success;
   const time = a.created_at ? a.created_at.slice(11, 19) : '';
   const color = providerColor(a.provider);
+  // Best-effort link: admin web /admin/ai/usage filtered by this provider + model.
+  // We don't have user_id on the usage log, so we can't link straight to a
+  // specific customer — but the operator can search by model/key from here.
+  const adminLogUrl = `https://main.thaiprompt.online/admin/ai/api-keys?search=${encodeURIComponent(a.key_name ?? '')}`;
   return (
-    <div className={`px-3 py-2 border-b border-line/60 text-2xs activity-row`} style={{ borderLeft: `2px solid ${fail ? 'rgba(239,68,68,0.5)' : color + '99'}` }}>
+    <a
+      href={adminLogUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={`block px-3 py-2 border-b border-line/60 text-2xs activity-row no-underline hover:bg-rowhi`}
+      style={{ borderLeft: `2px solid ${fail ? 'rgba(239,68,68,0.5)' : color + '99'}` }}
+      title="คลิกเปิด admin web → ai-keys"
+    >
       <div className="flex items-center gap-1.5 mb-0.5">
         <span className="mono text-mute">{time}</span>
         <span className="w-2 h-2 rounded-full" style={{ background: color }} />
@@ -292,6 +303,7 @@ function CallRow({ a }: { a: WorkerCallRow }) {
         ) : (
           <span className="mono text-mute">{a.latency_ms}ms</span>
         )}
+        <span className="text-mute group-hover:text-info">↗</span>
       </div>
       <div className="text-mute mono truncate" title={a.model}>{a.model}</div>
       {!fail && (
@@ -311,19 +323,35 @@ function CallRow({ a }: { a: WorkerCallRow }) {
           to { opacity: 1; transform: translateY(0); background: transparent; }
         }
       `}</style>
-    </div>
+    </a>
   );
 }
 
 function CommentDmCard({ d }: { d: CommentDmRow }) {
   const ts = d.engaged_at ? d.engaged_at.slice(11, 19) : '';
+  // facebook_post_id format: "{pageId}_{postId}". Splitting gives us a clean URL.
+  // facebook_comment_id format: "{postId}_{commentId}" → take part after underscore.
+  const [pageId, postOnlyId] = (d.fb_post_id ?? '').split('_');
+  const commentOnlyId = (d.fb_comment_id ?? '').split('_')[1] ?? null;
+  const postUrl = pageId && postOnlyId ? `https://www.facebook.com/${pageId}/posts/${postOnlyId}` : null;
+  const commentDeepUrl =
+    pageId && postOnlyId && commentOnlyId
+      ? `${postUrl}?comment_id=${commentOnlyId}`
+      : postUrl;
+  // FB Page Inbox (Business Suite) — admin can read the DM thread with this user.
+  const inboxUrl = pageId
+    ? `https://business.facebook.com/latest/inbox/?asset_id=${pageId}&thread_id=${d.fb_user_id}`
+    : null;
+  // Admin web reading lookup by FB user id — closest thing to "open this customer's history".
+  const adminUserUrl = `https://main.thaiprompt.online/admin/fortune/readings?search=${encodeURIComponent(d.fb_user_id ?? '')}`;
+
   return (
     <div className="panel p-2.5 text-xs">
       <div className="flex items-center gap-2 mb-1.5">
         <ChannelChip channel="fb" />
         <span className="mono text-2xs text-mute">{ts}</span>
         <span className="text-fg/90 truncate flex-1">PSID {d.fb_user_id}</span>
-        <span className="mono text-2xs text-mute">post {d.fb_post_id.slice(-8)}</span>
+        <span className="mono text-2xs text-mute">post {(d.fb_post_id ?? '').slice(-8)}</span>
       </div>
       {d.comment_text && (
         <div className="text-mute italic line-clamp-1 mb-1">› คอมเม้นต์: "{d.comment_text}"</div>
@@ -332,8 +360,41 @@ function CommentDmCard({ d }: { d: CommentDmRow }) {
         <div className="text-ok/90 line-clamp-1 mb-1">↩ ตอบ comment: {d.comment_reply}</div>
       )}
       {d.dm_message && (
-        <div className="text-info/90 line-clamp-2">✉ ส่ง DM: {d.dm_message}</div>
+        <div className="text-info/90 line-clamp-2 mb-1.5">✉ ส่ง DM: {d.dm_message}</div>
       )}
+      <div className="flex gap-1 mt-1.5">
+        {commentDeepUrl && (
+          <a
+            href={commentDeepUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn btn-info text-2xs flex-1 justify-center"
+            title="เปิดคอมเม้นต์ในโพสต์ FB"
+          >
+            🔗 ดูโพสต์ FB
+          </a>
+        )}
+        {inboxUrl && (
+          <a
+            href={inboxUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn btn-mystic text-2xs flex-1 justify-center"
+            title="เปิด FB Page Inbox สนทนากับ user นี้"
+          >
+            📨 Inbox
+          </a>
+        )}
+        <a
+          href={adminUserUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="btn text-2xs flex-1 justify-center"
+          title="เปิดประวัติ readings ของลูกค้านี้ใน admin web"
+        >
+          📜 ประวัติ
+        </a>
+      </div>
     </div>
   );
 }
