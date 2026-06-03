@@ -46,7 +46,9 @@ export function LiveChats() {
         {live.data.map((ch) => (
           <Link
             key={ch.id}
-            href={`/chat?id=${ch.id}`}
+            // LiveChats ids are "ch-{readingId}" but /chat threads are "r-{readingId}".
+            // Normalise so the deep-link resolves to the right thread (not the first one).
+            href={`/chat?thread=${encodeURIComponent(ch.id.replace(/^ch-/, 'r-'))}`}
             className="row block no-underline"
           >
             <div className="flex items-center gap-2 w-full">

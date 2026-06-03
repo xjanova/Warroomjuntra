@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useEve, type EveMood } from '@/lib/stores/eve';
+import { useWarroom } from '@/lib/stores/warroom';
 import { useSettings, isPaired as isPairedFn } from '@/lib/stores/settings';
 import { eveChat, describeError } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -218,7 +219,11 @@ export function EveChatBody({
 
   const onAction = useCallback((action: string) => {
     if (action === 'open-crit') {
-      document.dispatchEvent(new CustomEvent('warroom:open-case', { detail: { id: 'c-pay-001' } }));
+      // Open the case drawer straight through the store. The previous
+      // CustomEvent('warroom:open-case') had no listener anywhere — it was a
+      // no-op. In the unpaired demo this resolves the mock case; when paired
+      // Eve answers via the live /eve/chat model so this canned link isn't shown.
+      useWarroom.getState().openCaseDrawer('c-pay-001');
     }
   }, []);
 

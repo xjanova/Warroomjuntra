@@ -17,6 +17,7 @@ export type ChatThread = {
   name: string;
   channel: Channel;
   psid: string;
+  userId?: number | null;
   openedAt: string;
   bot: boolean;
   takenBy?: { initial: string; color: string };

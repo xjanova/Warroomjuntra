@@ -117,27 +117,13 @@ export default function BotsPage() {
             </div>
             <div className="p-3 grid grid-cols-2 gap-2 text-xs">
               <div>
-                <div className="text-mute text-2xs">รอบถัดไป</div>
+                <div className="text-mute text-2xs">สถานะ</div>
                 <div className="mono text-fg">{b.next}</div>
               </div>
               <div>
-                <div className="text-mute text-2xs">รอบล่าสุด</div>
+                <div className="text-mute text-2xs">provider / model</div>
                 <div className={`mono ${b.state === 'ok' ? 'text-ok' : 'text-warn'}`}>{b.last}</div>
               </div>
-              <div>
-                <div className="text-mute text-2xs">สำเร็จ</div>
-                <div className="mono text-ok">{b.success}%</div>
-              </div>
-              <div>
-                <div className="text-mute text-2xs">รัน 7 วัน</div>
-                <div className="mono text-fg">{b.runs7d}</div>
-              </div>
-            </div>
-            <div className="px-3 pb-3">
-              <svg className="w-full" width="100%" height={32} viewBox="0 0 200 32" preserveAspectRatio="none">
-                <path d={b.spark} fill="none" stroke={b.color} strokeWidth={1.5} strokeLinejoin="round" />
-                <path d={`${b.spark} L 200 32 L 0 32 Z`} fill={b.color} opacity={0.1} />
-              </svg>
             </div>
             <div className="px-3 pb-3 flex gap-1">
               <button

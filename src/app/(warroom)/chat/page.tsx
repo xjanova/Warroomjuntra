@@ -9,12 +9,10 @@ import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { Switch } from '@/components/ui/Switch';
 import { Kbd } from '@/components/ui/Kbd';
 import { useWarroom } from '@/lib/stores/warroom';
-import { useFortuneFeed, sendChatMessage, suggestChatReply, fetchReadingTranscript, fetchFortuneWorkersQueue, fetchBanStatus, banUser, unbanUser, markReadingPaid, useAdminData, describeError, type ReadingTranscriptMessage, type FortuneWorkersQueue, type WorkerCallRow, type BanStatusResponse } from '@/lib/api';
+import { useFortuneFeed, sendChatMessage, suggestChatReply, fetchReadingTranscript, fetchFortuneWorkersQueue, fetchBanStatus, banUser, unbanUser, markReadingPaid, fetchUserReadings, useAdminData, describeError, type ReadingTranscriptMessage, type FortuneWorkersQueue, type WorkerCallRow, type BanStatusResponse } from '@/lib/api';
 import { useSettings, isPaired as isPairedFn } from '@/lib/stores/settings';
 import { readingToChatThread } from '@/lib/adapters/chat';
 import { cn } from '@/lib/utils';
-
-const SENTIMENT_30D = 'oo+oo-oo+o-oo+';
 
 // Static-export builds require useSearchParams() to be inside a Suspense
 // boundary so the CSR-bailout has somewhere to fall through.
@@ -64,31 +62,39 @@ function ChatPageInner() {
   const [bot, setBot] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(threads.map((c) => [c.id, c.bot])),
   );
-  // Track which deepThreadParam we already honored so subsequent thread-list
-  // refreshes don't snap activeId back to it (which would override the
-  // operator's manual clicks every poll tick).
-  const consumedDeepParam = useRef<string>(deepThreadParam);
-  // Reset bot map when the thread list changes (mock → live, or refetch).
-  // Only re-resolve the deep-link when the URL param itself changes — or when
-  // the previously-unresolvable param finally matches a thread that just
-  // appeared in the live feed.
+  // The deep-link param we've already resolved (or given up on). null = not yet
+  // resolved, so a fresh page load / external link keeps retrying until the live
+  // feed delivers the target thread — instead of snapping to threads[0] forever
+  // because the live list isn't in the very first (mock) render.
+  const resolvedDeepParam = useRef<string | null>(null);
   useEffect(() => {
     setBot(Object.fromEntries(threads.map((c) => [c.id, c.bot])));
-    const paramChanged = deepThreadParam !== consumedDeepParam.current;
-    if (paramChanged) {
+
+    // Honor the deep-link until we actually land on its thread. Retries across
+    // feed updates (live threads arrive asynchronously after mount).
+    if (deepThreadParam && resolvedDeepParam.current !== deepThreadParam) {
       const fromUrl = resolveDeepThread(deepThreadParam, threads);
       if (fromUrl) {
         setActiveId(fromUrl);
-        consumedDeepParam.current = deepThreadParam;
+        resolvedDeepParam.current = deepThreadParam;
+        return;
+      }
+      // Not in the list yet. If the live feed has finished loading the id is
+      // genuinely absent → give up and let the fallback pick threads[0]. While
+      // still loading, wait for the next threads update before deciding.
+      if (feed.source === 'live') {
+        resolvedDeepParam.current = deepThreadParam;
+      } else {
         return;
       }
     }
+
     if (!threads.find((c) => c.id === activeId)) {
       setActiveId(threads[0]?.id ?? '');
     }
     // resolveDeepThread is referentially stable (pure local helper)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [threads, activeId, deepThreadParam]);
+  }, [threads, activeId, deepThreadParam, feed.source]);
 
   // 🪪 (2026-05-24) Realtime worker activity for the currently-open thread.
   //   Polls /fortune/workers/queue every 3s (same cadence as the workers page)
@@ -174,6 +180,49 @@ function ChatPageInner() {
 
   // "In-flight" = call landed in the last 30s. Drives the typing-dots animation.
   const workerIsLive = !!activeWorker && (activeWorker.age_seconds ?? 999) <= 30;
+
+  // 📜 Real recent-reading history for the active customer's sidebar — replaces
+  //    the old hardcoded list + the fabricated "ดูดวงทั้งหมด" count. Fetched by
+  //    user id; FB-only threads (no account) show an honest empty state.
+  const activeUserId = active?.userId ?? null;
+  const [recentReadings, setRecentReadings] = useState<Array<{ id: number; title: string; when: string; tone: 'mystic' | 'info' }>>([]);
+  const [recentTotal, setRecentTotal] = useState<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (!paired || !activeUserId) {
+      setRecentReadings([]);
+      setRecentTotal(null);
+      return;
+    }
+    fetchUserReadings(activeUserId, { per_page: 6 })
+      .then((res) => {
+        if (cancelled) return;
+        setRecentTotal(res.total ?? res.data?.length ?? 0);
+        setRecentReadings(
+          (res.data ?? []).map((r) => {
+            const isCeltic = (r.response_type ?? '').toLowerCase().includes('celtic');
+            const firstQ = Array.isArray(r.questions) && r.questions.length ? String(r.questions[0]) : 'คำถามทั่วไป';
+            return {
+              id: r.id,
+              title:
+                (isCeltic ? 'Celtic' : r.is_paid ? 'พรีเมียม' : 'ทั่วไป') +
+                ' — "' + (firstQ.length > 26 ? firstQ.slice(0, 24) + '…' : firstQ) + '"',
+              when: r.created_at ? new Date(r.created_at).toLocaleDateString('th-TH', { day: '2-digit', month: 'short' }) : '—',
+              tone: isCeltic ? ('mystic' as const) : ('info' as const),
+            };
+          }),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setRecentReadings([]);
+          setRecentTotal(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [paired, activeUserId]);
 
   // 🚫 (2026-05-24) Ban-status for the active thread. Cached per psid so
   //   switching back doesn't re-fetch. Refreshed on thread switch + after
@@ -729,7 +778,7 @@ function ChatPageInner() {
               </div>
               <div className="bg-panel border border-line rounded p-2">
                 <div className="text-mute">ดูดวงทั้งหมด</div>
-                <div className="mono text-fg text-base font-semibold">{active.readings}</div>
+                <div className="mono text-fg text-base font-semibold">{recentTotal != null ? recentTotal : '—'}</div>
               </div>
               <div className="bg-panel border border-line rounded p-2">
                 <div className="text-mute">ค้างจ่าย</div>
@@ -762,54 +811,22 @@ function ChatPageInner() {
             </div>
           </div>
 
-          <div className="p-3 border-b border-line">
-            <div className="t-h mb-2">SENTIMENT 14 วัน</div>
-            <div className="flex items-center gap-0.5 h-8">
-              {SENTIMENT_30D.split('').map((s, i) => (
-                <div
-                  key={i}
-                  className="flex-1 h-full rounded-sm"
-                  style={{
-                    background:
-                      s === '+'
-                        ? 'rgba(16,185,129,.5)'
-                        : s === '-'
-                        ? 'rgba(239,68,68,.5)'
-                        : 'rgba(75,85,99,.25)',
-                  }}
-                />
-              ))}
-            </div>
-          </div>
-
-          <div className="p-3 border-b border-line">
-            <div className="t-h mb-2">PERSONA NOTES</div>
-            <ul className="text-xs space-y-1 text-fg/90">
-              <li className="flex gap-1.5"><span className="text-info">›</span>ชอบดูดวงเรื่องความรัก (78%)</li>
-              <li className="flex gap-1.5"><span className="text-info">›</span>ชอบ Celtic Cross มากกว่าไพ่ 3 ใบ</li>
-              <li className="flex gap-1.5"><span className="text-info">›</span>โอนผ่าน KBANK ทุกครั้ง</li>
-              <li className="flex gap-1.5"><span className="text-warn">›</span>ใจร้อน — ตอบช้าจะทักซ้ำใน 5 นาที</li>
-            </ul>
-          </div>
-
           <div className="p-3">
             <div className="t-h mb-2">ดูดวงล่าสุด</div>
             <div className="space-y-1.5">
-              <div className="flex items-center gap-2 text-xs">
-                <span className="dot dot-mystic" />
-                <span className="flex-1 text-fg truncate">Celtic — &quot;ความรักหลังเลิกแฟน&quot;</span>
-                <span className="text-2xs text-mute mono">14m</span>
-              </div>
-              <div className="flex items-center gap-2 text-xs">
-                <span className="dot dot-info" />
-                <span className="flex-1 text-fg truncate">3 ใบ — &quot;งานที่สมัคร&quot;</span>
-                <span className="text-2xs text-mute mono">1d</span>
-              </div>
-              <div className="flex items-center gap-2 text-xs">
-                <span className="dot dot-info" />
-                <span className="flex-1 text-fg truncate">รายเดือน</span>
-                <span className="text-2xs text-mute mono">3d</span>
-              </div>
+              {recentReadings.length > 0 ? (
+                recentReadings.map((r) => (
+                  <div key={r.id} className="flex items-center gap-2 text-xs">
+                    <span className={`dot dot-${r.tone}`} />
+                    <span className="flex-1 text-fg truncate">{r.title}</span>
+                    <span className="text-2xs text-mute mono">{r.when}</span>
+                  </div>
+                ))
+              ) : (
+                <div className="text-2xs text-mute">
+                  {activeUserId ? '(ไม่มีประวัติ)' : '(ลูกค้า FB ยังไม่มีบัญชี — ดูประวัติไม่ได้)'}
+                </div>
+              )}
             </div>
           </div>
         </aside>

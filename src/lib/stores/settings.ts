@@ -341,3 +341,27 @@ export function isPaired(s: SettingsState): boolean {
     !!s.connection.baseUrl
   );
 }
+
+/**
+ * Derive the Laravel admin-web URL (the operator panel) from the configured
+ * API base URL. The API base is stored as `https://host/api/admin`; the web
+ * panel lives at `https://host/admin`. Several warroom actions (credit adjust,
+ * refunds, broadcast, account flags) have no warroom-scoped API endpoint and
+ * deep-link into the admin web instead — this keeps that host in one place
+ * rather than hardcoding `main.thaiprompt.online` at every call site.
+ *
+ * Reads the live store, so call it from event handlers (not render).
+ */
+export function adminWebUrl(path = ''): string {
+  const base = useSettings.getState().connection.baseUrl;
+  let origin = 'https://main.thaiprompt.online';
+  if (base) {
+    try {
+      origin = new URL(base).origin;
+    } catch {
+      /* malformed base — keep production fallback */
+    }
+  }
+  const p = path ? (path.startsWith('/') ? path : `/${path}`) : '';
+  return `${origin}/admin${p}`;
+}

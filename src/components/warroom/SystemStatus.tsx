@@ -12,11 +12,19 @@ export function SystemStatus() {
     mock: SYSTEM,
   });
 
+  // Header dot must reflect the WORST service row, not a hardcoded green — an
+  // operator glancing at the panel header should see red when a provider is down.
+  const worstStatus = data.reduce<'ok' | 'warn' | 'crit'>((w, s) => {
+    if (s.status === 'crit') return 'crit';
+    if (s.status === 'warn' && w !== 'crit') return 'warn';
+    return w;
+  }, 'ok');
+
   return (
     <section className="panel flex flex-col min-h-0">
       <header className="panel-h">
         <div className="title">
-          <span className="dot dot-ok" />
+          <span className={`dot dot-${worstStatus}`} />
           <span className="t-h">สถานะระบบ · SYSTEM</span>
           <DataSourceBadge source={source} isLoading={isLoading} error={error} />
         </div>

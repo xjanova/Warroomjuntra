@@ -63,8 +63,10 @@ export function TopBar() {
     };
   }, [paired]);
 
-  // Show live data when paired; fall back to mock presence otherwise.
-  const presenceRows = paired && livePresence.length > 0
+  // When paired, only ever show REAL admins (even an empty strip while the first
+  // poll lands) — never the demo team, which would misrepresent who's online.
+  // The mock team is only for the unpaired design-preview state.
+  const presenceRows = paired
     ? livePresence.map((u) => ({ id: String(u.id), initial: u.initials, online: u.is_online, name: u.name, role: u.role }))
     : presence;
 
@@ -153,7 +155,7 @@ export function TopBar() {
         className={cn('btn', frozen ? 'btn-warn' : 'btn-ghost')}
       >
         {frozen ? <Play size={12} /> : <Pause size={12} />}
-        <span>{frozen ? 'หยุด' : 'แช่แข็ง'}</span>
+        <span>{frozen ? 'เล่นต่อ' : 'แช่แข็ง'}</span>
       </button>
 
       <button

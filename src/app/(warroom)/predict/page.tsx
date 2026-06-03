@@ -14,14 +14,14 @@ type Provider = {
   label: string;
   model: string;
   color: string;
-  latency: string;
-  cost: string;
 };
 
+// No hardcoded latency/cost — those are measured per-run and shown on the result
+// card from the real /ai/playground/run response (latency_ms + tokens).
 const PROVIDERS: Provider[] = [
-  { id: 'gemini', label: 'Gemini Pro', model: 'gemini-2.0-flash-exp', color: '#22d3ee', latency: '342ms', cost: '฿0.0042' },
-  { id: 'groq', label: 'Groq Llama', model: 'llama-3.3-70b-versatile', color: '#10b981', latency: '186ms', cost: '฿0.0019' },
-  { id: 'qwen', label: 'Qwen-72B', model: 'qwen-2.5-72b-instruct', color: '#8b5cf6', latency: '1,420ms', cost: '฿0.0028' },
+  { id: 'gemini', label: 'Gemini Pro', model: 'gemini-2.0-flash-exp', color: '#22d3ee' },
+  { id: 'groq', label: 'Groq Llama', model: 'llama-3.3-70b-versatile', color: '#10b981' },
+  { id: 'qwen', label: 'Qwen-72B', model: 'qwen-2.5-72b-instruct', color: '#8b5cf6' },
 ];
 
 const TEMPLATES = [
@@ -44,7 +44,7 @@ export default function PredictPage() {
   const [selectedTemplate, setSelectedTemplate] = useState(TEMPLATES[0]);
   const [prompt, setPrompt] = useState(TEMPLATES[0].prompt);
   const [active, setActive] = useState<Record<string, boolean>>({ gemini: true, groq: true, qwen: false });
-  const [results, setResults] = useState<Record<string, { text: string; latencyMs: number; error?: string }>>({});
+  const [results, setResults] = useState<Record<string, { text: string; latencyMs: number; tokens?: number | null; error?: string }>>({});
   const [running, setRunning] = useState(false);
   const pushToast = useWarroom((s) => s.pushToast);
   const isPaired = useSettings((s) => s.connection.status === 'paired');
@@ -75,6 +75,7 @@ export default function PredictPage() {
           map[uiId] = {
             text: result.success ? (result.response ?? '(empty)') : '',
             latencyMs: result.latency_ms,
+            tokens: result.tokens,
             error: result.success ? undefined : (result.error ?? 'unknown error'),
           };
         }
@@ -168,10 +169,6 @@ export default function PredictPage() {
                     <div className="text-xs text-fg">{p.label}</div>
                     <div className="text-2xs text-mute mono">{p.model}</div>
                   </div>
-                  <div className="text-right">
-                    <div className="text-2xs mono text-dim">{p.latency}</div>
-                    <div className="text-2xs mono text-mute">{p.cost}</div>
-                  </div>
                 </label>
               ))}
             </div>
@@ -235,7 +232,7 @@ export default function PredictPage() {
                   {results[p.id] && !results[p.id].error && (
                     <>
                       <Pill tone="ok">{results[p.id].latencyMs}ms</Pill>
-                      <Pill tone="dim">{p.cost}</Pill>
+                      {results[p.id].tokens != null && <Pill tone="dim">{results[p.id].tokens} tok</Pill>}
                     </>
                   )}
                   {results[p.id]?.error && <Pill tone="crit">ERROR</Pill>}

@@ -1,7 +1,9 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useWarroom } from '@/lib/stores/warroom';
+import { adminWebUrl } from '@/lib/stores/settings';
 import { useUserDetail } from '@/lib/api';
 import { fetchUserReadings } from '@/lib/api';
 import { DrawerShell } from './DrawerShell';
@@ -13,7 +15,8 @@ const SENTIMENT_30D = 'oooo+ooo-oo+ooo--o+o-oo++oooo-';
 const SENTIMENT_NEUTRAL = 'o'.repeat(30);
 
 export function Customer360Drawer() {
-  const { customerDrawerId, closeCustomerDrawer } = useWarroom();
+  const { customerDrawerId, closeCustomerDrawer, pushToast } = useWarroom();
+  const router = useRouter();
   // customerDrawerId is the numeric user id when set from /customers cards.
   // Pass it through useUserDetail which only fetches when non-null.
   const numericId = customerDrawerId && /^\d+$/.test(customerDrawerId) ? Number(customerDrawerId) : null;
@@ -83,6 +86,37 @@ export function Customer360Drawer() {
     };
   }, [numericId]);
 
+  // ── Real actions ────────────────────────────────────────────────────────────
+  // Jump to the live chat workspace. FB customers deep-link straight to their
+  // thread via psid; LINE / unknown fall back to the chat list.
+  const messageCustomer = () => {
+    if (display.channel !== 'LINE' && display.psid) {
+      router.push(`/chat?thread=fb-${encodeURIComponent(display.psid)}`);
+    } else {
+      router.push('/chat');
+    }
+    closeCustomerDrawer();
+  };
+
+  // Flag / account management + credit top-up have no warroom-scoped endpoint —
+  // they live in the admin web. Deep-link there (same pattern as /payment).
+  const flagCustomer = () => {
+    if (!numericId) {
+      pushToast({ kind: 'warn', title: 'ติดป้ายลูกค้า (ตัวอย่าง)', body: 'เชื่อมต่อ API ก่อนเพื่อจัดการจริง' });
+      return;
+    }
+    window.open(adminWebUrl('/users/' + numericId), '_blank', 'noopener');
+    pushToast({ kind: 'info', title: 'เปิดแอดมินเพื่อจัดการลูกค้า', body: display.name });
+  };
+
+  const addCredit = () => {
+    if (!numericId) {
+      pushToast({ kind: 'warn', title: 'เติมเครดิต (ตัวอย่าง)', body: 'เชื่อมต่อ API ก่อนเพื่อเติมจริง' });
+      return;
+    }
+    window.open(adminWebUrl('/wallets?credit_user=' + numericId), '_blank', 'noopener');
+  };
+
   return (
     <DrawerShell open={!!customerDrawerId} onClose={closeCustomerDrawer}>
       <div className="px-4 py-3 border-b border-line flex items-center gap-2">
@@ -94,8 +128,8 @@ export function Customer360Drawer() {
           <DataSourceBadge source={detail.source} isLoading={detail.isLoading} error={detail.error} />
         )}
         <div className="flex-1" />
-        <button className="btn">💬 ส่งข้อความ</button>
-        <button className="btn">⚠ ติดป้ายลูกค้าปัญหา</button>
+        <button className="btn" onClick={messageCustomer}>💬 ส่งข้อความ</button>
+        <button className="btn" onClick={flagCustomer} title="จัดการ/ติดป้ายลูกค้าในแอดมินเว็บ">⚠ ติดป้ายลูกค้าปัญหา</button>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
@@ -177,8 +211,9 @@ export function Customer360Drawer() {
                       <div className="flex justify-between"><span className="text-dim">email</span><span className="mono text-fg truncate">{detail.data.email}</span></div>
                     )}
                     <div className="flex gap-1.5 mt-2">
-                      <button className="btn btn-ok flex-1 justify-center">+ เครดิต</button>
-                      <button className="btn flex-1 justify-center">รีเซ็ต</button>
+                      <button className="btn btn-ok flex-1 justify-center" onClick={addCredit} title="เติมเครดิตในแอดมินเว็บ">
+                        + เครดิต
+                      </button>
                     </div>
                   </div>
                 </div>

@@ -16,6 +16,27 @@ const SAMPLES: Pick<FullEvent, 'kind' | 'tone' | 'category' | 'channel' | 'msg'>
   { kind: 'SYS', tone: 'warn', category: 'system', msg: 'AI gemini latency 320ms' },
 ];
 
+// Time-range presets for the event filter. `min: null` = no recency limit.
+const RANGE_OPTIONS: Array<{ label: string; min: number | null }> = [
+  { label: '5 นาทีล่าสุด', min: 5 },
+  { label: '1 ชั่วโมง', min: 60 },
+  { label: '24 ชั่วโมง', min: 1440 },
+  { label: 'ทั้งหมดวันนี้', min: null },
+];
+
+// Events carry ts as "HH:MM:SS". Return how long ago that was (minutes), wrapping
+// a "future" time back to the previous day so a fresh stream never vanishes.
+function minutesAgo(tsStr: string): number | null {
+  const m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(tsStr.trim());
+  if (!m) return null; // unknown format → caller treats as "always show"
+  const now = new Date();
+  const evSec = Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3] ?? 0);
+  const nowSec = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+  let diff = nowSec - evSec;
+  if (diff < 0) diff += 86400;
+  return diff / 60;
+}
+
 export default function EventsPage() {
   const feed = useFortuneFeed();
   const fromApi = useMemo<FullEvent[]>(() => readingsToFullEvents(feed.data), [feed.data]);
@@ -33,6 +54,7 @@ export default function EventsPage() {
     'audit',
     'moderation',
   ]);
+  const [rangeMin, setRangeMin] = useState<number | null>(60);
   const frozen = useWarroom((s) => s.frozen);
 
   // Replace items with live data when available
@@ -67,6 +89,10 @@ export default function EventsPage() {
   const filtered = useMemo(() => {
     return items.filter((e) => {
       if (!active.includes(e.category)) return false;
+      if (rangeMin != null) {
+        const ago = minutesAgo(e.ts);
+        if (ago != null && ago > rangeMin) return false;
+      }
       if (filter) {
         try {
           return new RegExp(filter, 'i').test(e.msg + e.kind);
@@ -76,7 +102,7 @@ export default function EventsPage() {
       }
       return true;
     });
-  }, [items, active, filter]);
+  }, [items, active, filter, rangeMin]);
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -100,12 +126,16 @@ export default function EventsPage() {
           className="text-xs px-2 py-1 w-72"
         />
         <span className="text-2xs text-mute">ช่วงเวลา:</span>
-        <select className="text-xs px-1.5 py-1">
-          <option>5 นาทีล่าสุด</option>
-          <option>1 ชั่วโมง</option>
-          <option>24 ชั่วโมง</option>
-          <option>วันนี้</option>
-          <option>ระบุเอง</option>
+        <select
+          className="text-xs px-1.5 py-1"
+          value={rangeMin == null ? 'all' : String(rangeMin)}
+          onChange={(e) => setRangeMin(e.target.value === 'all' ? null : Number(e.target.value))}
+        >
+          {RANGE_OPTIONS.map((o) => (
+            <option key={o.label} value={o.min == null ? 'all' : String(o.min)}>
+              {o.label}
+            </option>
+          ))}
         </select>
         <div className="w-px h-6 bg-line" />
         {EVENT_TOGGLES.map((t) => (

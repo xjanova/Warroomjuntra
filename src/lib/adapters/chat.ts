@@ -41,6 +41,7 @@ export function readingToChatThread(r: FortuneReading): ChatThread {
     name: customer,
     channel,
     psid,
+    userId: r.user?.id ?? null,
     openedAt,
     bot,
     sentiment,

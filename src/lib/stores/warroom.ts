@@ -36,6 +36,12 @@ type WarroomState = {
   customerDrawerId: string | null;
   settingsOpen: boolean;
 
+  // Triage queue: operator-dismissed / snoozed cases. Maps case id → epoch ms
+  // when it should reappear (a far-future value = "closed / handled"). The
+  // TriageQueue filters these out so ⏸ พักเคส and ✓ ปิดเคส actually remove a
+  // row instead of being decorative.
+  hiddenCases: Record<string, number>;
+
   // setters
   setClock: (clock: string, dateStr: string) => void;
   setFrozen: (v: boolean) => void;
@@ -49,6 +55,12 @@ type WarroomState = {
   openCustomerDrawer: (id: string) => void;
   closeCustomerDrawer: () => void;
   setSettingsOpen: (v: boolean) => void;
+
+  /** Hide a triage case. `minutes` omitted/0 = dismiss until far future ("ปิดเคส");
+   *  a positive value snoozes it for that many minutes ("พักเคส"). */
+  hideCase: (id: string, minutes?: number) => void;
+  /** Bring a hidden/snoozed case back into the queue immediately. */
+  unhideCase: (id: string) => void;
 
   pushToast: (t: Omit<ToastMsg, 'id' | 'createdAt'>) => void;
   dismissToast: (id: string) => void;
@@ -75,6 +87,7 @@ export const useWarroom = create<WarroomState>((set) => ({
   caseDrawerId: null,
   customerDrawerId: null,
   settingsOpen: false,
+  hiddenCases: {},
 
   setClock: (clock, dateStr) => set({ clock, dateStr }),
   setFrozen: (v) => set({ frozen: v }),
@@ -88,6 +101,21 @@ export const useWarroom = create<WarroomState>((set) => ({
   openCustomerDrawer: (id) => set({ customerDrawerId: id }),
   closeCustomerDrawer: () => set({ customerDrawerId: null }),
   setSettingsOpen: (v) => set({ settingsOpen: v }),
+
+  hideCase: (id, minutes) =>
+    set((s) => ({
+      hiddenCases: {
+        ...s.hiddenCases,
+        // 0 / undefined → dismiss for ~10 years; otherwise snooze N minutes.
+        [id]: Date.now() + (minutes && minutes > 0 ? minutes * 60_000 : 315_360_000_000),
+      },
+    })),
+  unhideCase: (id) =>
+    set((s) => {
+      const next = { ...s.hiddenCases };
+      delete next[id];
+      return { hiddenCases: next };
+    }),
 
   pushToast: (t) =>
     set((s) => ({

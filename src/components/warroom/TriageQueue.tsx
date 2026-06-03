@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Pill } from '@/components/ui/Pill';
 import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { ALL_CASES } from '@/lib/mock/warroom';
@@ -31,7 +32,10 @@ export function TriageQueue() {
 
   const openCaseDrawer = useWarroom((s) => s.openCaseDrawer);
   const pushToast = useWarroom((s) => s.pushToast);
+  const hideCase = useWarroom((s) => s.hideCase);
+  const hiddenCases = useWarroom((s) => s.hiddenCases);
   const sla = useSettings((s) => s.sla);
+  const router = useRouter();
 
   const feed = useFortuneFeed();
 
@@ -69,12 +73,31 @@ export function TriageQueue() {
   const live = feed; // alias for header badge
 
   const cases = useMemo(() => {
+    const now = Date.now();
     return allCases.filter((c) => {
+      const hideUntil = hiddenCases[c.id];
+      if (hideUntil && hideUntil > now) return false; // snoozed / dismissed
       if (typeFilter && c.type !== typeFilter) return false;
       if (filter && !(c.customer + c.detail).toLowerCase().includes(filter.toLowerCase())) return false;
       return true;
     });
-  }, [filter, typeFilter, allCases]);
+  }, [filter, typeFilter, allCases, hiddenCases]);
+
+  const snoozeCase = (c: TriageCase) => {
+    hideCase(c.id, 5);
+    pushToast({ kind: 'info', title: 'พักเคส 5 นาที', body: `${c.customer} — จะกลับมาเตือนอีกครั้ง` });
+  };
+
+  const dismissCase = (c: TriageCase) => {
+    hideCase(c.id);
+    pushToast({ kind: 'ok', title: 'ปิดเคสแล้ว', body: `${c.customer} · ${typeMeta(c.type).label}` });
+  };
+
+  const openChat = (c: TriageCase) => {
+    // Live cases carry id "r-{readingId}"; the /chat page resolves ?thread=
+    // directly. Mock cases (c-…) fall through to the first thread, still useful.
+    router.push(`/chat?thread=${encodeURIComponent(c.id)}`);
+  };
 
   const critCount = useMemo(() => allCases.filter((c) => c.severity === 'crit').length, [allCases]);
   const warnCount = useMemo(() => allCases.filter((c) => c.severity === 'warn').length, [allCases]);
@@ -206,7 +229,13 @@ export function TriageQueue() {
 
                 <div className="flex items-center gap-1 shrink-0">
                   {claim_ ? (
-                    <button className="btn" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      className="btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openChat(c);
+                      }}
+                    >
                       เปิดแชต
                     </button>
                   ) : (
@@ -220,10 +249,24 @@ export function TriageQueue() {
                       รับเคส
                     </button>
                   )}
-                  <button className="btn btn-ghost h-6 w-6 justify-center" title="พักเคส" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    className="btn btn-ghost h-6 w-6 justify-center"
+                    title="พักเคส 5 นาที"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      snoozeCase(c);
+                    }}
+                  >
                     ⏸
                   </button>
-                  <button className="btn btn-ghost h-6 w-6 justify-center" title="ปิดเคส" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    className="btn btn-ghost h-6 w-6 justify-center"
+                    title="ปิดเคส (เอาออกจากคิว)"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      dismissCase(c);
+                    }}
+                  >
                     ✓
                   </button>
                 </div>

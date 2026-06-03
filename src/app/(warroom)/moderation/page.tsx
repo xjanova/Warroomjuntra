@@ -334,7 +334,6 @@ export default function ModerationPage() {
             <table className="dense">
               <thead className="sticky top-0 z-10">
                 <tr>
-                  <th className="w-8"><input type="checkbox" /></th>
                   <th>ลูกค้า</th>
                   <th>ช่อง</th>
                   <th>ระดับ</th>
@@ -347,7 +346,6 @@ export default function ModerationPage() {
               <tbody>
                 {filtered.map((s) => (
                   <tr key={s.id} onClick={() => setActive(s)} className={`cursor-pointer ${active?.id === s.id ? 'selected' : ''}`}>
-                    <td onClick={(e) => e.stopPropagation()}><input type="checkbox" /></td>
                     <td>
                       <div className="flex items-center gap-2">
                         <div
@@ -555,13 +553,18 @@ export default function ModerationPage() {
       {tab === 'rules' && (
         <main className="flex-1 p-4 overflow-y-auto">
           <div className="max-w-4xl mx-auto space-y-3">
+            <div className="text-2xs text-mute bg-panel2 border border-line rounded px-3 py-2 leading-relaxed">
+              ✏️ <span className="text-fg">รายการคีย์เวิร์ด</span> แก้ไขได้จริง (บันทึกขึ้น API ทันที) — ส่วน
+              <span className="text-fg"> สวิตช์เปิด/ปิดกฎ และเกณฑ์คะแนน</span> เป็นค่าฝั่งเซิร์ฟเวอร์ ปรับใน
+              แอดมินเว็บ จึงแสดงเป็นแบบอ่านอย่างเดียวที่นี่
+            </div>
             <div className="panel p-3">
               <div className="flex items-center gap-2 mb-2">
                 <span className="dot dot-crit" />
                 <span className="font-semibold text-fg">คำสแปม / คำหยาบ</span>
                 <Pill tone="crit">+30 คะแนน</Pill>
                 <div className="flex-1" />
-                <Switch checked onChange={() => {}} />
+                <Switch checked disabled onChange={() => {}} />
               </div>
               <div className="text-2xs text-mute mb-2">ตรวจจับคำในรายการต่อไปนี้ในข้อความลูกค้า (เพิ่มคะแนนภัยทุกครั้งที่เจอ)</div>
               <div className="flex flex-wrap gap-1 mb-2">
@@ -606,7 +609,7 @@ export default function ModerationPage() {
                 <span className="font-semibold text-fg">ทักซ้ำ / สแปม</span>
                 <Pill tone="warn">+10 คะแนน/ครั้ง</Pill>
                 <div className="flex-1" />
-                <Switch checked onChange={() => {}} />
+                <Switch checked disabled onChange={() => {}} />
               </div>
               <div className="grid grid-cols-2 gap-3 text-xs">
                 <div>
@@ -626,7 +629,7 @@ export default function ModerationPage() {
                 <span className="font-semibold text-fg">หลายบัญชี (multi-account)</span>
                 <Pill tone="info">+25 คะแนน</Pill>
                 <div className="flex-1" />
-                <Switch checked onChange={() => {}} />
+                <Switch checked disabled onChange={() => {}} />
               </div>
               <div className="text-2xs text-mute">หา fingerprint ที่ตรงกัน: IP, device, ลายมือพิมพ์, รูปโปรไฟล์</div>
               <div className="mt-2 grid grid-cols-3 gap-2">
@@ -642,7 +645,7 @@ export default function ModerationPage() {
                 <span className="font-semibold text-fg">อารมณ์ผันผวน (mood swing)</span>
                 <Pill tone="warn">+15 คะแนน</Pill>
                 <div className="flex-1" />
-                <Switch checked onChange={() => {}} />
+                <Switch checked disabled onChange={() => {}} />
               </div>
               <div className="text-2xs text-mute">sentiment เปลี่ยนจาก happy → angry ภายใน 10 ข้อความ</div>
             </div>
@@ -653,7 +656,7 @@ export default function ModerationPage() {
                 <span className="font-semibold text-fg">ขู่ / ใช้กฎหมาย / รีวิว 1 ดาว</span>
                 <Pill tone="crit">+40 คะแนน + escalate</Pill>
                 <div className="flex-1" />
-                <Switch checked onChange={() => {}} />
+                <Switch checked disabled onChange={() => {}} />
               </div>
               <div className="text-2xs text-mute">เด้งแจ้งเตือนหัวหน้ากะทันที</div>
             </div>
@@ -663,7 +666,7 @@ export default function ModerationPage() {
                 <span className="dot dot-info" />
                 <span className="font-semibold text-fg">เกณฑ์แบนอัตโนมัติ</span>
                 <div className="flex-1" />
-                <Switch checked={false} onChange={() => {}} />
+                <Switch checked={false} disabled onChange={() => {}} />
               </div>
               <div className="grid grid-cols-3 gap-2 text-xs">
                 <div>

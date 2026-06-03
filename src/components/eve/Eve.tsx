@@ -8,22 +8,13 @@ import { useAdminData, fetchEveSignals, type EveSignals } from '@/lib/api';
 import { EveAvatar } from './EveAvatar';
 import { EveChatBody } from './EveChatBody';
 
-// Drag-position persistence — saved as offset-from-right-bottom (px), so the
-// dock still feels anchored to the bottom-right when the viewport resizes.
-const DRAG_STORE_KEY = 'warroom-eve-dock-position.v1';
+// Eve always (re)starts anchored at the default bottom-right on a fresh mount /
+// reload. We deliberately do NOT persist the dragged position across reloads — a
+// stale offset (smaller viewport / different monitor) used to strand the dock
+// off-screen with no way to grab it back. In-session drags still hold because
+// this dock stays mounted across client-side page navigation.
 type DragPos = { right: number; bottom: number };
 const DEFAULT_POS: DragPos = { right: 14, bottom: 36 };
-
-function loadPos(): DragPos {
-  if (typeof window === 'undefined') return DEFAULT_POS;
-  try {
-    const raw = localStorage.getItem(DRAG_STORE_KEY);
-    if (!raw) return DEFAULT_POS;
-    const p = JSON.parse(raw) as DragPos;
-    if (typeof p.right === 'number' && typeof p.bottom === 'number') return p;
-  } catch {}
-  return DEFAULT_POS;
-}
 
 function clampPos(p: DragPos, dockEl: HTMLElement | null): DragPos {
   if (typeof window === 'undefined') return p;
@@ -216,9 +207,10 @@ export function Eve() {
   const dragStateRef = useRef<{ startX: number; startY: number; startRight: number; startBottom: number } | null>(null);
   const hasMovedRef = useRef(false);
 
-  // Load saved position once on mount.
+  // Re-anchor to the default on every fresh mount; clamp in case the viewport
+  // is small. No restore from storage — that's what stranded Eve off-screen.
   useEffect(() => {
-    setPos(loadPos());
+    setPos((p) => clampPos(p, dockRef.current));
   }, []);
 
   // Re-clamp on window resize so the dock can't end up off-screen.
@@ -269,13 +261,7 @@ export function Eve() {
     try {
       (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
     } catch {}
-    setPos((p) => {
-      const final = clampPos(p, dockRef.current);
-      try {
-        localStorage.setItem(DRAG_STORE_KEY, JSON.stringify(final));
-      } catch {}
-      return final;
-    });
+    setPos((p) => clampPos(p, dockRef.current));
     // If the pointer barely moved we treat this as a click, not a drag.
     // The button's onClick still fires naturally because we don't preventDefault.
   }, []);

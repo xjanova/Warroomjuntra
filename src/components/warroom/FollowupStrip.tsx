@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Pill } from '@/components/ui/Pill';
 import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { FOLLOWUPS } from '@/lib/mock/warroom';
@@ -13,14 +14,32 @@ import {
   sortFollowups,
 } from '@/lib/helpers';
 import { useWarroom } from '@/lib/stores/warroom';
-import { useFortuneFeed } from '@/lib/api';
+import { adminWebUrl } from '@/lib/stores/settings';
+import { useFortuneFeed, sendChatMessage, cancelReading, describeError } from '@/lib/api';
 import { readingToFollowup, needsFollowup } from '@/lib/adapters/followups';
 import type { Followup } from '@/lib/mock/types';
+
+// Live followup cards carry id "r-{readingId}". Pull the numeric id so we can
+// hit /chat/send + /readings/{id}/cancel. Mock cards return null → preview only.
+function readingIdOf(id: string): number | null {
+  const m = /^r-(\d+)$/.exec(id);
+  return m ? Number(m[1]) : null;
+}
+
+function followupText(f: Followup): string {
+  return f.status === 'await_reading'
+    ? 'สวัสดีค่ะ 🙏 ขออภัยที่คำทำนายล่าช้านะคะ กำลังเร่งให้อยู่ เดี๋ยวส่งให้เร็วที่สุดเลยค่ะ ✨'
+    : `สวัสดีค่ะคุณ${f.customer} 🙏 เห็นว่ามีรายการ "${f.service}" ค้างอยู่ — สนใจให้แม่หมอช่วยดูต่อไหมคะ ✨`;
+}
 
 export function FollowupStrip() {
   const [sort, setSort] = useState<'heat' | 'value'>('heat');
   const pushToast = useWarroom((s) => s.pushToast);
+  const openCaseDrawer = useWarroom((s) => s.openCaseDrawer);
+  const router = useRouter();
   const feed = useFortuneFeed();
+  const [busy, setBusy] = useState<Record<string, boolean>>({});
+  const [bulkSending, setBulkSending] = useState(false);
 
   const followups = useMemo<Followup[]>(() => {
     if (feed.source === 'live') {
@@ -49,6 +68,87 @@ export function FollowupStrip() {
   const items = useMemo(() => sortFollowups(followups, sort), [followups, sort]);
   const total = useMemo(() => followups.reduce((s, f) => s + f.amount, 0), [followups]);
 
+  // ── Real actions ──────────────────────────────────────────────────────────
+  // Send a follow-up DM to one customer via /chat/send (reading_id routes it to
+  // the right FB/LINE recipient server-side). Debounced per card.
+  const pokeOne = async (f: Followup) => {
+    const rid = readingIdOf(f.id);
+    if (feed.source !== 'live' || rid == null) {
+      pushToast({
+        kind: f.status === 'await_reading' ? 'crit' : 'warn',
+        title: f.status === 'await_reading' ? '⚡ เร่งคำทำนาย (ตัวอย่าง)' : 'ส่งติดตาม (ตัวอย่าง)',
+        body: `${f.customer} — เชื่อมต่อ API ก่อนเพื่อส่งจริง`,
+      });
+      return;
+    }
+    if (busy[f.id]) return; // guard double-tap
+    setBusy((b) => ({ ...b, [f.id]: true }));
+    try {
+      const res = await sendChatMessage({ reading_id: rid, text: followupText(f) });
+      pushToast({
+        kind: res.delivered ? 'ok' : 'warn',
+        title: res.delivered ? 'ส่งติดตามแล้ว' : 'ส่งไม่ผ่าน platform',
+        body: res.delivered ? f.customer : `${f.customer} — FB/LINE ปฏิเสธ ลองใหม่อีกครั้ง`,
+      });
+    } catch (e) {
+      pushToast({ kind: 'crit', title: 'ส่งติดตามล้มเหลว', body: describeError(e) });
+    } finally {
+      setBusy((b) => ({ ...b, [f.id]: false }));
+    }
+  };
+
+  // Cancel the underlying reading/bill via /readings/{id}/cancel, then refetch.
+  const cancelOne = async (f: Followup) => {
+    if (!confirm(`ยกเลิกบิลของ ${f.customer} (฿${f.amount.toLocaleString()}) ?`)) return;
+    const rid = readingIdOf(f.id);
+    if (feed.source !== 'live' || rid == null) {
+      pushToast({ kind: 'warn', title: 'ยกเลิกบิล (ตัวอย่าง)', body: f.customer });
+      return;
+    }
+    if (busy[f.id]) return;
+    setBusy((b) => ({ ...b, [f.id]: true }));
+    try {
+      await cancelReading(rid, 'cancelled_from_warroom_followup');
+      pushToast({ kind: 'ok', title: 'ยกเลิกบิลแล้ว', body: `${f.customer} · ${f.bill}` });
+      feed.refetch?.();
+    } catch (e) {
+      pushToast({ kind: 'crit', title: 'ยกเลิกล้มเหลว', body: describeError(e) });
+    } finally {
+      setBusy((b) => ({ ...b, [f.id]: false }));
+    }
+  };
+
+  // Bulk DM every live followup. Outward-facing → require explicit confirm with
+  // the count, then report real delivered/failed tallies.
+  const sendAll = async () => {
+    const targets = items.filter((f) => readingIdOf(f.id) != null);
+    if (feed.source !== 'live' || targets.length === 0) {
+      pushToast({ kind: 'warn', title: 'ส่งติดตามทั้งหมด (ตัวอย่าง)', body: `${followups.length} ราย — เชื่อมต่อ API ก่อน` });
+      return;
+    }
+    if (bulkSending) return;
+    if (!confirm(`ส่งข้อความติดตามถึงลูกค้า ${targets.length} ราย?\nระบบจะ DM แต่ละคนผ่าน FB/LINE`)) return;
+    setBulkSending(true);
+    let ok = 0;
+    let fail = 0;
+    for (const f of targets) {
+      const rid = readingIdOf(f.id)!;
+      try {
+        const res = await sendChatMessage({ reading_id: rid, text: followupText(f) });
+        if (res.delivered) ok++;
+        else fail++;
+      } catch {
+        fail++;
+      }
+    }
+    setBulkSending(false);
+    pushToast({
+      kind: fail === 0 ? 'ok' : ok === 0 ? 'crit' : 'warn',
+      title: `ส่งติดตามแล้ว ${ok}/${targets.length} ราย`,
+      body: fail > 0 ? `ส่งไม่ผ่าน ${fail} ราย` : 'สำเร็จทั้งหมด',
+    });
+  };
+
   // Hide when paired AND no real followups — keeps the dashboard clean on slow days.
   if (feed.source === 'live' && followups.length === 0) return null;
 
@@ -67,10 +167,12 @@ export function FollowupStrip() {
           เรียง: {sort === 'heat' ? 'ความร้อน' : 'มูลค่า'}
         </button>
         <button
-          className="btn btn-warn text-2xs"
-          onClick={() => pushToast({ kind: 'warn', title: 'ส่งติดตามแล้ว', body: `${followups.length} ราย` })}
+          className="btn btn-warn text-2xs disabled:opacity-40"
+          onClick={sendAll}
+          disabled={bulkSending}
+          title="ส่งข้อความติดตามถึงลูกค้าทุกคนในแถบนี้"
         >
-          📣 ส่งติดตามทั้งหมด
+          {bulkSending ? '⏳ กำลังส่ง…' : '📣 ส่งติดตามทั้งหมด'}
         </button>
       </div>
 
@@ -81,6 +183,7 @@ export function FollowupStrip() {
           return (
             <div
               key={f.id}
+              onClick={() => openCaseDrawer(f.id)}
               className="shrink-0 w-[220px] cursor-pointer group relative rounded border"
               style={{
                 background: followupBg(f),
@@ -147,17 +250,14 @@ export function FollowupStrip() {
                 </div>
                 <div className="flex gap-1 mt-2">
                   <button
+                    disabled={busy[f.id]}
                     onClick={(e) => {
                       e.stopPropagation();
-                      pushToast({
-                        kind: isStuckPaid ? 'crit' : 'warn',
-                        title: isStuckPaid ? '⚡ เร่งส่งคำทำนาย' : 'ส่งติดตามแล้ว',
-                        body: f.customer,
-                      });
+                      void pokeOne(f);
                     }}
-                    className={`btn ${isStuckPaid ? 'btn-crit' : 'btn-warn'} flex-1 justify-center text-2xs py-1`}
+                    className={`btn ${isStuckPaid ? 'btn-crit' : 'btn-warn'} flex-1 justify-center text-2xs py-1 disabled:opacity-40`}
                   >
-                    {isStuckPaid ? '⚡ เร่ง' : '💬 ทัก'}
+                    {busy[f.id] ? '⏳' : isStuckPaid ? '⚡ เร่ง' : '💬 ทัก'}
                   </button>
                   {isStuckPaid ? (
                     <button
@@ -165,18 +265,32 @@ export function FollowupStrip() {
                       title="เปิดในแอดมินเว็บเพื่อ retry คำทำนาย"
                       onClick={(e) => {
                         e.stopPropagation();
-                        const rid = f.id.replace(/^r-/, '');
-                        window.open('https://main.thaiprompt.online/admin/fortune/readings/' + rid, '_blank', 'noopener');
+                        window.open(adminWebUrl('/fortune/readings/' + f.id.replace(/^r-/, '')), '_blank', 'noopener');
                       }}
                     >
                       🔮 retry
                     </button>
                   ) : (
-                    <button className="btn flex-1 justify-center text-2xs py-1" title="ส่ง QR อีกครั้ง" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      className="btn flex-1 justify-center text-2xs py-1"
+                      title="เปิดแชตเพื่อส่ง QR ชำระเงินอีกครั้ง"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        router.push(`/chat?thread=${encodeURIComponent(f.id)}`);
+                      }}
+                    >
                       ▦ QR
                     </button>
                   )}
-                  <button className="btn btn-ghost justify-center text-2xs py-1 px-1.5" title="ยกเลิกบิล" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    className="btn btn-ghost justify-center text-2xs py-1 px-1.5 disabled:opacity-40"
+                    title="ยกเลิกบิล"
+                    disabled={busy[f.id]}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void cancelOne(f);
+                    }}
+                  >
                     ✕
                   </button>
                 </div>

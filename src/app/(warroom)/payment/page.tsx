@@ -29,6 +29,8 @@ import {
 export default function PaymentPage() {
   const [tab, setTab] = useState<'match' | 'floating' | 'ledger'>('match');
   const [selectedSmsId, setSelectedSmsId] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+  const [today, setToday] = useState('');
   const pushToast = useWarroom((s) => s.pushToast);
 
   // ── Live SMS inbox (pending only — what matters on this tab) ──
@@ -82,6 +84,28 @@ export default function PaymentPage() {
   const isLive = smsFeed.source === 'live';
 
   const selectedSms = sms.find((s) => s.id === selectedSmsId);
+
+  // Live search across the two reconciliation columns (name / bill no. / amount).
+  const q = search.trim().toLowerCase();
+  const smsView = q
+    ? sms.filter((s) => `${s.sender} ${s.bank} ${s.ref} ${s.amount}`.toLowerCase().includes(q))
+    : sms;
+  const billsView = q
+    ? bills.filter((b) => `${b.customer} ${b.id} ${b.service} ${b.amount}`.toLowerCase().includes(q))
+    : bills;
+
+  // Today's date — set on the client only to avoid an SSR hydration mismatch.
+  useEffect(() => {
+    setToday(new Date().toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' }));
+  }, []);
+
+  // Live per-bank breakdown of the pending SMS inbox — replaces the old
+  // hardcoded "KBANK · 14/ชม · SCB · 3 unparsed" chips with real counts.
+  const bankCounts = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const s of sms) m[s.bank] = (m[s.bank] ?? 0) + 1;
+    return Object.entries(m).sort((a, b) => b[1] - a[1]);
+  }, [sms]);
 
   const suggestedBillIds = useMemo(() => {
     if (!selectedSms) return [] as string[];
@@ -149,17 +173,15 @@ export default function PaymentPage() {
         <span className="dot dot-ok" />
         <span className="t-h">กระทบยอดการเงิน · RECONCILIATION</span>
         <DataSourceBadge source={smsFeed.source} />
-        <span className="text-2xs text-mute mono">21 พ.ค. 69</span>
+        <span className="text-2xs text-mute mono">{today || '—'}</span>
         <div className="flex-1" />
-        <span className="text-2xs text-mute">มีเชื่อมต่อ SMS Parser</span>
-        <div className="flex items-center gap-1.5 px-2 h-7 rounded border border-line">
-          <span className="dot dot-ok" />
-          <span className="text-2xs mono text-fg">KBANK · 14 รายการ/ชม.</span>
-        </div>
-        <div className="flex items-center gap-1.5 px-2 h-7 rounded border border-warn/40 bg-warn/10">
-          <span className="dot dot-warn" />
-          <span className="text-2xs mono text-warn">SCB · 3 unparsed</span>
-        </div>
+        <span className="text-2xs text-mute">SMS Parser · {sms.length} รอจับคู่</span>
+        {bankCounts.map(([bank, n]) => (
+          <div key={bank} className="flex items-center gap-1.5 px-2 h-7 rounded border border-line">
+            <span className="dot dot-ok" />
+            <span className="text-2xs mono text-fg">{bank} · {n} รายการ</span>
+          </div>
+        ))}
       </header>
 
       <section className="px-3 py-2 border-b border-line shrink-0">
@@ -188,7 +210,13 @@ export default function PaymentPage() {
           </button>
         ))}
         <div className="flex-1" />
-        <input type="text" placeholder="ค้นหา ชื่อ / เลขบิล / จำนวน" className="text-xs px-2 py-1 w-72 mr-2" />
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="ค้นหา ชื่อ / เลขบิล / จำนวน"
+          className="text-xs px-2 py-1 w-72 mr-2"
+        />
         <button
           className="btn"
           onClick={() => setTab('ledger')}
@@ -214,12 +242,12 @@ export default function PaymentPage() {
               <div className="title">
                 <span className="dot dot-info" />
                 <span className="t-h">SMS เงินเข้า · UNMATCHED</span>
-                <Pill tone="info">{sms.length}</Pill>
+                <Pill tone="info">{smsView.length}</Pill>
               </div>
               <span className="text-2xs text-mute">เรียงจากใหม่ → เก่า</span>
             </div>
             <div className="overflow-y-auto flex-1 min-h-0">
-              {sms.map((s) => (
+              {smsView.map((s) => (
                 <div
                   key={s.id}
                   onClick={() => setSelectedSmsId(selectedSmsId === s.id ? null : s.id)}
@@ -273,12 +301,12 @@ export default function PaymentPage() {
               <div className="title">
                 <span className="dot dot-warn" />
                 <span className="t-h">บิลค้าง · OPEN INVOICES</span>
-                <Pill tone="warn">{bills.length}</Pill>
+                <Pill tone="warn">{billsView.length}</Pill>
               </div>
               <span className="text-2xs text-mute">เก่าสุดอยู่บนสุด</span>
             </div>
             <div className="overflow-y-auto flex-1 min-h-0">
-              {bills.map((b) => (
+              {billsView.map((b) => (
                 <div
                   key={b.id}
                   className={`row group ${suggestedBillIds.includes(b.id) ? 'bg-ok/10' : ''}`}
@@ -500,7 +528,7 @@ export default function PaymentPage() {
                 <span className="t-h">สมุดบัญชี · LEDGER · วันนี้</span>
               </div>
               <div className="flex items-center gap-1.5">
-                <span className="text-2xs text-mute">21 พ.ค. 69</span>
+                <span className="text-2xs text-mute">{today || '—'}</span>
                 <button
                   className="btn"
                   onClick={() => {

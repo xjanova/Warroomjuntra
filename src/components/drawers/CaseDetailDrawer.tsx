@@ -1,9 +1,10 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useWarroom } from '@/lib/stores/warroom';
-import { useSettings } from '@/lib/stores/settings';
-import { useReadingDetail } from '@/lib/api';
+import { useSettings, adminWebUrl } from '@/lib/stores/settings';
+import { useReadingDetail, markReadingPaid, describeError } from '@/lib/api';
 import { DrawerShell } from './DrawerShell';
 import { Pill } from '@/components/ui/Pill';
 import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
@@ -16,9 +17,11 @@ const TABS = ['ไทม์ไลน์', 'ข้อมูลที่เกี�
 type Tab = (typeof TABS)[number];
 
 export function CaseDetailDrawer() {
-  const { caseDrawerId, closeCaseDrawer } = useWarroom();
+  const { caseDrawerId, closeCaseDrawer, hideCase, pushToast } = useWarroom();
   const sla = useSettings((s) => s.sla);
+  const router = useRouter();
   const [tab, setTab] = useState<Tab>('ไทม์ไลน์');
+  const [acting, setActing] = useState(false);
 
   // Live readings have ids like "r-{numeric}" — extract and fetch.
   // Mock cases have ids like "c-pay-001" — look up locally.
@@ -53,6 +56,68 @@ export function CaseDetailDrawer() {
   const sev = severityColor(activeCase.severity);
   const reading = detail.data;
 
+  // ── Real case actions ──────────────────────────────────────────────────────
+  const goChat = () => {
+    router.push(`/chat?thread=${encodeURIComponent(activeCase.id)}`);
+    closeCaseDrawer();
+  };
+
+  // "กู้บิล" = confirm the customer actually paid → mark the reading paid.
+  const recoverBill = async () => {
+    if (!readingId) {
+      pushToast({ kind: 'warn', title: 'กู้บิล (ตัวอย่าง)', body: 'เคสนี้ไม่มี reading จริงให้ยืนยัน' });
+      return;
+    }
+    if (!confirm(`ยืนยันว่าชำระเงินแล้วสำหรับเคส ${activeCase.customer}?`)) return;
+    if (acting) return;
+    setActing(true);
+    try {
+      await markReadingPaid(readingId);
+      pushToast({ kind: 'ok', title: 'ยืนยันชำระเงินแล้ว', body: activeCase.customer });
+      detail.refetch?.();
+    } catch (e) {
+      pushToast({ kind: 'crit', title: 'ทำรายการล้มเหลว', body: describeError(e) });
+    } finally {
+      setActing(false);
+    }
+  };
+
+  // Escalation has no backend channel — copy a shareable link the operator can
+  // paste into the team chat to pull in a senior.
+  const escalate = async () => {
+    const link = readingId
+      ? adminWebUrl('/fortune/readings/' + readingId)
+      : typeof window !== 'undefined'
+      ? window.location.origin
+      : '';
+    try {
+      await navigator.clipboard.writeText(link);
+      pushToast({ kind: 'info', title: 'คัดลอกลิงก์เคสแล้ว', body: 'วางในแชตทีมเพื่อส่งต่อให้หัวหน้า' });
+    } catch {
+      pushToast({ kind: 'warn', title: 'คัดลอกไม่สำเร็จ', body: link });
+    }
+  };
+
+  const closeCase = () => {
+    hideCase(activeCase.id);
+    pushToast({ kind: 'ok', title: 'ปิดเคสแล้ว', body: activeCase.customer });
+    closeCaseDrawer();
+  };
+
+  const snoozeCase = () => {
+    hideCase(activeCase.id, 5);
+    pushToast({ kind: 'info', title: 'พักเคส 5 นาที', body: activeCase.customer });
+    closeCaseDrawer();
+  };
+
+  const openInAdmin = () => {
+    window.open(
+      readingId ? adminWebUrl('/fortune/readings/' + readingId) : adminWebUrl('/fortune/readings'),
+      '_blank',
+      'noopener',
+    );
+  };
+
   return (
     <DrawerShell open={open} onClose={closeCaseDrawer}>
       <div className="px-4 py-3 border-b border-line">
@@ -66,8 +131,12 @@ export function CaseDetailDrawer() {
             <DataSourceBadge source={detail.source} isLoading={detail.isLoading} error={detail.error} />
           )}
           <div className="flex-1" />
-          <button className="btn btn-ghost h-7 px-2">ESCALATE ↑</button>
-          <button className="btn btn-ok h-7 px-2">ปิดเคส</button>
+          <button className="btn btn-ghost h-7 px-2" onClick={escalate} title="คัดลอกลิงก์เคสเพื่อส่งต่อให้หัวหน้า">
+            ⧉ ส่งต่อ
+          </button>
+          <button className="btn btn-ok h-7 px-2" onClick={closeCase} title="เอาเคสออกจากคิว">
+            ✓ ปิดเคส
+          </button>
         </div>
         <div className="flex items-center gap-3">
           <div
@@ -184,10 +253,22 @@ export function CaseDetailDrawer() {
 
       <div className="border-t border-line p-3 bg-panel2/40">
         <div className="grid grid-cols-2 gap-2">
-          <button className="btn btn-primary justify-center py-2">💬 เปิดแชต</button>
-          <button className="btn btn-ok justify-center py-2">✓ กู้บิล + เติมเครดิต</button>
-          <button className="btn justify-center py-2">↪ มอบหมายให้คนอื่น</button>
-          <button className="btn justify-center py-2">⏸ พักเคส 5 นาที</button>
+          <button className="btn btn-primary justify-center py-2" onClick={goChat}>
+            💬 เปิดแชต
+          </button>
+          <button
+            className="btn btn-ok justify-center py-2 disabled:opacity-40"
+            onClick={recoverBill}
+            disabled={acting}
+          >
+            {acting ? '⏳ กำลังทำ…' : '✓ กู้บิล (ยืนยันจ่าย)'}
+          </button>
+          <button className="btn justify-center py-2" onClick={openInAdmin}>
+            🔮 เปิดในแอดมิน
+          </button>
+          <button className="btn justify-center py-2" onClick={snoozeCase}>
+            ⏸ พักเคส 5 นาที
+          </button>
         </div>
       </div>
     </DrawerShell>

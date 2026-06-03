@@ -8,7 +8,7 @@ import { useAdminData, fetchUsers, fetchUserStats, type AdminUserStats } from '@
 import { userToCustomerCard } from '@/lib/adapters/customers';
 import { useWarroom } from '@/lib/stores/warroom';
 
-type SortKey = 'ltv' | 'recent' | 'readings';
+type SortKey = 'ltv' | 'credits' | 'level';
 
 const RARITY_BORDERS: Record<Rarity, string> = {
   LEGENDARY: 'border-warn/50 shadow-[0_0_24px_rgba(245,158,11,.15)]',
@@ -56,7 +56,8 @@ export default function CustomersPage() {
       return true;
     });
     if (sort === 'ltv') r.sort((a, b) => b.ltv - a.ltv);
-    else if (sort === 'readings') r.sort((a, b) => b.readings - a.readings);
+    else if (sort === 'credits') r.sort((a, b) => b.credits - a.credits);
+    else if (sort === 'level') r.sort((a, b) => b.level - a.level);
     return r;
   }, [live.data, search, chan, rarity, sort, vipOnly, problemOnly]);
 
@@ -101,8 +102,8 @@ export default function CustomersPage() {
         </select>
         <select value={sort} onChange={(e) => setSort(e.target.value as SortKey)} className="text-xs px-1.5 py-1">
           <option value="ltv">LTV สูงสุด</option>
-          <option value="recent">มาล่าสุด</option>
-          <option value="readings">ดูดวงบ่อย</option>
+          <option value="credits">เครดิตมากสุด</option>
+          <option value="level">ระดับสูงสุด</option>
         </select>
         <label className="flex items-center gap-1.5 text-xs">
           <input type="checkbox" checked={vipOnly} onChange={(e) => setVipOnly(e.target.checked)} />
@@ -184,7 +185,7 @@ export default function CustomersPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-1.5 mt-3 text-2xs">
+              <div className="grid grid-cols-2 gap-1.5 mt-3 text-2xs">
                 <div className="bg-panel/80 rounded p-1.5">
                   <div className="text-mute">LTV</div>
                   <div className="mono text-ok font-semibold">฿{(c.ltv / 1000).toFixed(1)}k</div>
@@ -192,10 +193,6 @@ export default function CustomersPage() {
                 <div className="bg-panel/80 rounded p-1.5">
                   <div className="text-mute">เครดิต</div>
                   <div className="mono text-info font-semibold">{c.credits}</div>
-                </div>
-                <div className="bg-panel/80 rounded p-1.5">
-                  <div className="text-mute">ดูดวง</div>
-                  <div className="mono text-fg font-semibold">{c.readings}</div>
                 </div>
               </div>
 
@@ -223,15 +220,17 @@ export default function CustomersPage() {
                   />
                 ))}
               </div>
-              <div className="text-2xs text-mute mono mt-1">sentiment 14 วันล่าสุด</div>
+              <div className="text-2xs text-mute mono mt-1">sentiment (รอ endpoint)</div>
 
               <div className="grid grid-cols-3 gap-1 mt-3">
                 <button
                   className="btn justify-center text-2xs py-1"
                   onClick={(e) => {
                     e.stopPropagation();
-                    // Open the chat page with this customer pre-selected via query string
-                    window.location.href = '/chat?focus=' + encodeURIComponent(c.psid);
+                    // Deep-link to the chat thread. /chat resolves ?thread=fb-{psid};
+                    // LINE psids have no resolver yet, so fall back to the chat list.
+                    window.location.href =
+                      c.channel === 'LINE' ? '/chat' : '/chat?thread=fb-' + encodeURIComponent(c.psid);
                   }}
                 >
                   💬 แชต
