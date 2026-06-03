@@ -269,6 +269,7 @@ function PasswordLoginPanel({
           onSuccess(res.user);
         } else {
           onError(res.error);
+          setCode(''); // clear the rejected OTP so the operator can retype cleanly
         }
       } else {
         const res = await loginAndPair({ baseUrl, email, password });

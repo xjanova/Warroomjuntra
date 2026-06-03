@@ -1040,18 +1040,15 @@ function EveSafetyPanel() {
     <div className="panel p-3 space-y-3">
       <div className="t-h">ความปลอดภัย</div>
 
-      <label className="flex items-center gap-2">
-        <Switch
-          checked={safety.confirmDestructive}
-          onChange={(v) => setEveSafety({ confirmDestructive: v })}
-        />
+      <div className="flex items-start gap-2">
+        <span className="text-ok mt-0.5">🛡</span>
         <div>
-          <div className="text-fg">ยืนยันก่อนทำคำสั่งเสี่ยง</div>
+          <div className="text-fg">Eve ไม่ลงมือทำคำสั่งเสี่ยงเอง</div>
           <div className="text-2xs text-mute">
-            อนุมัติถอน / refund / cancel / ban — Eve จะ "เสนอ" ผ่าน toast แทนการลงมือเอง (แนะนำให้เปิดไว้)
+            อนุมัติถอน / refund / cancel / ban — Eve จะ &quot;เสนอ&quot; ผ่าน toast เสมอ ให้คุณกดทำเองในหน้าที่เกี่ยวข้อง (ออกแบบให้ปลอดภัยโดยค่าเริ่มต้น ไม่มีสวิตช์ปิด)
           </div>
         </div>
-      </label>
+      </div>
 
       <label className="flex items-center gap-2">
         <Switch

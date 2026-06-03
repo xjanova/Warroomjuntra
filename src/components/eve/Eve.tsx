@@ -107,7 +107,6 @@ export function Eve() {
   const paired = useSettings((s) => isPairedFn(s));
   const {
     mode, mood,
-    eyeY, eyeLX, eyeRX, mouthX, mouthY,
     setMode, setMood, setTyping, addMessage, clearMessages,
   } = useEve();
   const introPlayed = useRef(false);
@@ -382,24 +381,6 @@ export function Eve() {
                   )}
                 </small>
               </div>
-              <button
-                type="button"
-                className="eve-head-btn" data-no-drag="true"
-                title="ปรับตำแหน่งใบหน้า"
-                onClick={() => {
-                  const cur = `${eyeY}, ${eyeLX}, ${eyeRX}, ${mouthX}, ${mouthY}`;
-                  const next = window.prompt(
-                    'ปรับตำแหน่ง (eye-y, eyeL-x, eyeR-x, mouth-x, mouth-y — เลข 0-100)',
-                    cur,
-                  );
-                  if (!next) return;
-                  const [ey, el, er, mx, my] = next.split(',').map((s) => Number(s.trim()));
-                  if ([ey, el, er, mx, my].some((n) => Number.isNaN(n))) return;
-                  useEve.getState().setFace({ eyeY: ey, eyeLX: el, eyeRX: er, mouthX: mx, mouthY: my });
-                }}
-              >
-                ⚙
-              </button>
               <button type="button" className="eve-head-btn" data-no-drag="true" title="ย่อ" onClick={() => setMode('min')}>
                 —
               </button>
