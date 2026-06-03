@@ -9,7 +9,7 @@ import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { Switch } from '@/components/ui/Switch';
 import { Kbd } from '@/components/ui/Kbd';
 import { useWarroom } from '@/lib/stores/warroom';
-import { useFortuneFeed, sendChatMessage, suggestChatReply, fetchReadingTranscript, fetchFortuneWorkersQueue, fetchBanStatus, banUser, unbanUser, markReadingPaid, fetchUserReadings, useAdminData, describeError, type ReadingTranscriptMessage, type FortuneWorkersQueue, type WorkerCallRow, type BanStatusResponse } from '@/lib/api';
+import { useFortuneFeed, sendChatMessage, suggestChatReply, fetchReadingTranscript, fetchFortuneWorkersQueue, fetchBanStatus, banUser, unbanUser, markReadingPaid, fetchUserReadings, takeoverChat, resumeChatBot, fetchChatTakeoverStatus, useAdminData, describeError, type ReadingTranscriptMessage, type FortuneWorkersQueue, type WorkerCallRow, type BanStatusResponse } from '@/lib/api';
 import { useSettings, isPaired as isPairedFn } from '@/lib/stores/settings';
 import { readingToChatThread } from '@/lib/adapters/chat';
 import { cn } from '@/lib/utils';
@@ -223,6 +223,53 @@ function ChatPageInner() {
       cancelled = true;
     };
   }, [paired, activeUserId]);
+
+  // 🎮 (2026-06-04) Bot ⇄ admin takeover for the active thread, backed by the
+  //   real FortuneTakeoverService via /chat/takeover|resume|takeover-status.
+  //   Seeds the toggle from the server (overrides the response_type heuristic).
+  const [takeoverBusy, setTakeoverBusy] = useState(false);
+  useEffect(() => {
+    if (!paired || !active) return;
+    const rid = readingIdOf(active.id);
+    if (rid == null) return;
+    let cancelled = false;
+    fetchChatTakeoverStatus(rid)
+      .then((res) => {
+        if (!cancelled) setBot((s) => ({ ...s, [active.id]: !res.is_takeover }));
+      })
+      .catch(() => {
+        /* keep heuristic default on error */
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paired, active?.id]);
+
+  // v === true → hand back to the bot (resume); v === false → admin takes over.
+  // Optimistic with rollback so a failed round-trip never leaves a ghost state.
+  const setBotForThread = async (threadId: string, v: boolean) => {
+    const prev = bot[threadId];
+    setBot((s) => ({ ...s, [threadId]: v }));
+    const rid = readingIdOf(threadId);
+    if (!paired || rid == null) return; // mock / no real reading — local only
+    if (takeoverBusy) return;
+    setTakeoverBusy(true);
+    try {
+      if (v) {
+        await resumeChatBot(rid);
+        pushToast({ kind: 'ok', title: 'คืนงานให้บอทแล้ว', body: active?.name });
+      } else {
+        const res = await takeoverChat(rid);
+        pushToast({ kind: 'info', title: 'รับช่วงต่อจากบอท', body: `${active?.name ?? ''} · บอทหยุด ${res.remaining_minutes} นาที` });
+      }
+    } catch (e) {
+      setBot((s) => ({ ...s, [threadId]: prev })); // rollback
+      pushToast({ kind: 'crit', title: 'สลับบอท/แอดมินไม่สำเร็จ', body: describeError(e) });
+    } finally {
+      setTakeoverBusy(false);
+    }
+  };
 
   // 🚫 (2026-05-24) Ban-status for the active thread. Cached per psid so
   //   switching back doesn't re-fetch. Refreshed on thread switch + after
@@ -504,15 +551,17 @@ function ChatPageInner() {
               </div>
               <label className="flex items-center gap-1.5 text-2xs text-dim">
                 บอท
-                <Switch checked={bot[active.id]} onChange={(v) => setBot((s) => ({ ...s, [active.id]: v }))} />
+                <Switch
+                  checked={bot[active.id]}
+                  disabled={takeoverBusy}
+                  onChange={(v) => void setBotForThread(active.id, v)}
+                />
               </label>
               {!bot[active.id] && (
                 <button
-                  onClick={() => {
-                    setBot((s) => ({ ...s, [active.id]: true }));
-                    pushToast({ kind: 'ok', title: 'คืนงานให้บอทแล้ว', body: active.name });
-                  }}
-                  className="btn btn-ok"
+                  onClick={() => void setBotForThread(active.id, true)}
+                  disabled={takeoverBusy}
+                  className="btn btn-ok disabled:opacity-40"
                 >
                   ↪ คืนงานให้บอท
                 </button>

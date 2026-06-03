@@ -445,6 +445,42 @@ export async function suggestChatReply(payload: {
   });
 }
 
+// ---- Admin chat takeover (Warroom /chat bot⇄admin toggle) ------------------
+// Pauses the AI bot for one conversation (admin takes over) or hands it back.
+// Backed by FortuneTakeoverService — the SAME engine as the web /admin/takeover
+// page, so cache invalidation + webhook bypass stay consistent.
+
+export type ChatTakeoverStatus = {
+  reading_id: number;
+  is_takeover: boolean;        // true = admin in control, bot paused
+  until: string | null;
+  remaining_minutes: number;
+  minutes?: number;
+};
+
+export async function fetchChatTakeoverStatus(readingId: number) {
+  const qs = toQuery({ reading_id: readingId });
+  return apiRequest<ChatTakeoverStatus>({ path: `/chat/takeover-status${qs}` });
+}
+
+/** Admin takes over (bot paused). Omit minutes to use the server default. */
+export async function takeoverChat(readingId: number, minutes?: number) {
+  return apiRequest<ChatTakeoverStatus>({
+    method: 'POST',
+    path: '/chat/takeover',
+    body: minutes != null ? { reading_id: readingId, minutes } : { reading_id: readingId },
+  });
+}
+
+/** Hand the conversation back to the AI bot. */
+export async function resumeChatBot(readingId: number) {
+  return apiRequest<ChatTakeoverStatus>({
+    method: 'POST',
+    path: '/chat/resume',
+    body: { reading_id: readingId },
+  });
+}
+
 // ---- User detail extras (Customer 360 drawer) -----------------------------
 
 export async function fetchUserReadings(id: string | number, params?: { per_page?: number }) {

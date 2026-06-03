@@ -58,6 +58,9 @@ export {
   cancelReading,
   sendChatMessage,
   suggestChatReply,
+  takeoverChat,
+  resumeChatBot,
+  fetchChatTakeoverStatus,
   eveChat,
   fetchSmsInbox,
   fetchPaymentReconStats,
@@ -99,6 +102,7 @@ export type {
   ReadingTranscriptMessage,
   BehaviorCase,
   EveSignals,
+  ChatTakeoverStatus,
 } from './endpoints';
 export type {
   DashboardResponse,
