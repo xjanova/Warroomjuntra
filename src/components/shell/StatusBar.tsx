@@ -9,6 +9,7 @@ import { cn } from '@/lib/utils';
 export function StatusBar() {
   const { frozen, focusMode, muted, refreshInterval, setSettingsOpen } = useWarroom();
   const conn = useSettings((s) => s.connection);
+  const shift = useSettings((s) => s.shift);
 
   // Live worker telemetry. Shares the 'fortune-workers-queue' cache slot with
   // the /chat + /workers pages (coalesced), polled gently so the footer stays
@@ -58,6 +59,12 @@ export function StatusBar() {
       <span>คิว: <span className="text-fg">{queue ? `${queue.in_flight} รัน · ${queue.pending_paid + queue.pending_unpaid} รอ` : '—'}</span></span>
       <span>หน่วง: <span className={cn(lagMs != null && lagMs > 1500 ? 'text-warn' : 'text-ok')}>{lagMs != null ? `${Math.round(lagMs)}ms` : '—'}</span></span>
       <span className="hidden md:inline">ai chain: <span className="text-fg">{aiChain ?? '—'}</span></span>
+      <span
+        className="hidden lg:inline"
+        title={`รับกะจาก ${shift.takeoverFrom} · ส่งต่อ ${shift.handoverTo}${shift.handoverNote ? ' · ' + shift.handoverNote : ''}`}
+      >
+        กะ: <span className="text-fg">{shift.startAt}–{shift.endAt}</span>
+      </span>
       <div className="flex-1" />
       <span className="text-mute">รีเฟรชทุก {refreshInterval} วิ</span>
       {frozen ? <span className="text-warn">· แช่แข็ง</span> : null}

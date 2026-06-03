@@ -11,6 +11,7 @@ import {
 import { DrawerShell } from './DrawerShell';
 import { Switch } from '@/components/ui/Switch';
 import { Pill } from '@/components/ui/Pill';
+import { playAlertSound } from '@/lib/alerts';
 import {
   pairConnection,
   verifyConnection,
@@ -1111,11 +1112,14 @@ function SlaTab() {
   const sla = useSettings((s) => s.sla);
   const setSla = useSettings((s) => s.setSla);
 
-  const fields: { k: keyof typeof sla; label: string }[] = [
-    { k: 'reading', label: 'คำทำนายค้าง' },
-    { k: 'celtic', label: 'Celtic Cross' },
-    { k: 'payment', label: 'ยอดโอนไม่ตรง' },
-    { k: 'sensitive', label: 'เคสอ่อนไหว (mood ≥ 4)' },
+  // reading + celtic are consumed by readingToTriageCase() to color case
+  // severity in the warroom. payment + sensitive cases are scored server-side
+  // (behaviour-triage endpoint), so those two thresholds are reference-only here.
+  const fields: { k: keyof typeof sla; label: string; applied: boolean }[] = [
+    { k: 'reading', label: 'คำทำนายค้าง', applied: true },
+    { k: 'celtic', label: 'Celtic Cross', applied: true },
+    { k: 'payment', label: 'ยอดโอนไม่ตรง', applied: false },
+    { k: 'sensitive', label: 'เคสอ่อนไหว (mood ≥ 4)', applied: false },
   ];
 
   return (
@@ -1126,9 +1130,12 @@ function SlaTab() {
         <span className="text-crit">วิกฤต</span> เมื่อเกินเกณฑ์
       </p>
       <div className="space-y-2">
-        {fields.map(({ k, label }) => (
+        {fields.map(({ k, label, applied }) => (
           <div key={k} className="flex items-center gap-2">
-            <span className="flex-1 text-fg">{label}</span>
+            <span className="flex-1 text-fg">
+              {label}
+              {!applied && <span className="text-2xs text-mute ml-1">· คิดฝั่งเซิร์ฟเวอร์</span>}
+            </span>
             <input
               type="number"
               min={1}
@@ -1141,6 +1148,9 @@ function SlaTab() {
           </div>
         ))}
       </div>
+      <p className="text-2xs text-mute mt-3 pt-2 border-t border-line">
+        คำทำนายค้าง + Celtic ใช้คิดสีความรุนแรงในคิวจริง · ยอดโอน/เคสอ่อนไหว เซิร์ฟเวอร์เป็นคนคิด severity
+      </p>
     </section>
   );
 }
@@ -1199,6 +1209,11 @@ function NotifTab() {
           <span className="text-fg">แจ้งเตือนเคส mood 5 ทันที</span>
         </label>
       </div>
+      <p className="text-2xs text-mute mt-3 pt-2 border-t border-line leading-relaxed">
+        เด้งจริงเมื่อมี <span className="text-crit">เคสวิกฤตใหม่</span> (อ่านสัญญาณระบบทุก 30 วิ) —
+        เสียงใช้โปรไฟล์จากแท็บ <span className="text-fg">"เสียง"</span> และเงียบเมื่อกด mute ·
+        desktop notification ต้องเปิดแท็บ War Room ค้างไว้
+      </p>
     </section>
   );
 }
@@ -1216,21 +1231,8 @@ function SoundTab() {
   ];
 
   function preview() {
-    try {
-      // simple AudioContext beep — actual SFX would live in /public/assets/sfx/
-      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      const freq = sound.profile === 'bridge' ? 880 : sound.profile === 'submarine' ? 440 : 660;
-      osc.frequency.value = freq;
-      osc.type = 'sine';
-      gain.gain.value = (sound.volume / 100) * 0.2;
-      osc.connect(gain).connect(ctx.destination);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.18);
-    } catch {
-      /* no-op */
-    }
+    // Same engine the live AlertBridge uses, so the preview is honest.
+    playAlertSound(sound.profile, sound.volume);
   }
 
   return (
