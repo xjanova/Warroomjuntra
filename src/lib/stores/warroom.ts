@@ -74,13 +74,9 @@ export const useWarroom = create<WarroomState>((set) => ({
   focusMode: false,
   refreshInterval: 5,
   criticalFlash: false,
-  presence: [
-    { id: 'u1', initial: 'A', name: 'อภิชาต', role: 'lead', online: true },
-    { id: 'u2', initial: 'B', name: 'เบลล์', role: 'senior', online: true },
-    { id: 'u3', initial: 'C', name: 'ชนิดา', role: 'junior', online: true },
-    { id: 'u4', initial: 'J', name: 'แม่หมอจันทรา', role: 'mommor', online: true },
-    { id: 'u5', initial: 'P', name: 'พลอย', role: 'idle', online: false },
-  ],
+  // 🧹 (2026-06-04) No demo team — real admins come from /users/admins/online
+  //   (TopBar shows them only when paired). Empty until then.
+  presence: [],
   toasts: [],
 
   cmdkOpen: false,

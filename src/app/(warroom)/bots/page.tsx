@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { BOT_CARDS, BOT_STATS, type BotCard } from '@/lib/mock/bots-page';
+import { BOT_CARDS, type BotCard } from '@/lib/mock/bots-page';
 import { Switch } from '@/components/ui/Switch';
 import { Pill } from '@/components/ui/Pill';
 import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
@@ -73,16 +73,21 @@ export default function BotsPage() {
       </header>
 
       <section className="px-3 py-2 border-b border-line shrink-0">
-        <div className="grid grid-cols-5 gap-2">
-          {BOT_STATS.map((s) => (
-            <div key={s.label} className="panel px-3 py-2">
-              <div className="t-h">{s.label}</div>
-              <div className="mono text-2xl font-semibold mt-1" style={{ color: s.color }}>
-                {s.dyn ? enabledCount : s.value}
-              </div>
-              {s.sub && <div className="text-2xs text-mute mt-0.5">{s.sub}</div>}
-            </div>
-          ))}
+        {/* 🧹 (2026-06-04) Real counts computed from the live bot list — no
+            fabricated KPI numbers. Empty (0) until the live fetch lands. */}
+        <div className="grid grid-cols-3 gap-2">
+          <div className="panel px-3 py-2">
+            <div className="t-h">เปิดอยู่</div>
+            <div className="mono text-2xl font-semibold mt-1 text-ok">{enabledCount}</div>
+          </div>
+          <div className="panel px-3 py-2">
+            <div className="t-h">ปิดอยู่</div>
+            <div className="mono text-2xl font-semibold mt-1 text-mute">{Math.max(0, bots.length - enabledCount)}</div>
+          </div>
+          <div className="panel px-3 py-2">
+            <div className="t-h">บอททั้งหมด</div>
+            <div className="mono text-2xl font-semibold mt-1 text-info">{bots.length}</div>
+          </div>
         </div>
       </section>
 

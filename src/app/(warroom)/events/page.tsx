@@ -1,20 +1,13 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { EVENT_TOGGLES, FULL_EVENTS, type FullEvent } from '@/lib/mock/events-page';
+import { EVENT_TOGGLES, type FullEvent } from '@/lib/mock/events-page';
 import { ChannelChip, Pill } from '@/components/ui/Pill';
 import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { cn } from '@/lib/utils';
 import { useWarroom } from '@/lib/stores/warroom';
 import { useFortuneFeed } from '@/lib/api';
 import { readingsToFullEvents } from '@/lib/adapters/events-page';
-
-const SAMPLES: Pick<FullEvent, 'kind' | 'tone' | 'category' | 'channel' | 'msg'>[] = [
-  { kind: 'PAY OK', tone: 'ok', category: 'payment', channel: 'FB', msg: 'รับโอน ฿299 · บิลใหม่' },
-  { kind: 'READ', tone: 'info', category: 'reading', channel: 'LINE', msg: 'เริ่มดูดวง · qwen-72b' },
-  { kind: 'BOT', tone: 'mystic', category: 'bot', msg: 'บอทตอบสำเร็จ · 1.2s' },
-  { kind: 'SYS', tone: 'warn', category: 'system', msg: 'AI gemini latency 320ms' },
-];
 
 // Time-range presets for the event filter. `min: null` = no recency limit.
 const RANGE_OPTIONS: Array<{ label: string; min: number | null }> = [
@@ -41,8 +34,8 @@ export default function EventsPage() {
   const feed = useFortuneFeed();
   const fromApi = useMemo<FullEvent[]>(() => readingsToFullEvents(feed.data), [feed.data]);
 
-  // When mock or empty live → stream synthetic events for demo. When live and has data → use it.
-  const [items, setItems] = useState<FullEvent[]>(FULL_EVENTS);
+  // Live event list — populated from REAL readings only (no synthetic demo stream).
+  const [items, setItems] = useState<FullEvent[]>([]);
   const [live, setLive] = useState(true);
   const [filter, setFilter] = useState('');
   const [active, setActive] = useState<FullEvent['category'][]>([
@@ -57,31 +50,13 @@ export default function EventsPage() {
   const [rangeMin, setRangeMin] = useState<number | null>(60);
   const frozen = useWarroom((s) => s.frozen);
 
-  // Replace items with live data when available
+  // Drive the list from REAL readings. The ▶/⏸ button (live) freezes updates so
+  // the operator can read a snapshot; the global frozen flag also pauses.
   useEffect(() => {
-    if (feed.source === 'live' && fromApi.length > 0) {
+    if (feed.source === 'live' && live && !frozen) {
       setItems(fromApi);
     }
-  }, [feed.source, fromApi]);
-
-  // Demo stream only when not paired (mock mode)
-  useEffect(() => {
-    if (!live || frozen) return;
-    if (feed.source === 'live') return; // real data drives the list; don't fabricate
-    const id = setInterval(() => {
-      const sample = SAMPLES[Math.floor(Math.random() * SAMPLES.length)];
-      const d = new Date();
-      const p = (n: number) => String(n).padStart(2, '0');
-      const ev: FullEvent = {
-        id: Date.now(),
-        ts: `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`,
-        ref: '#' + Math.floor(Math.random() * 9000 + 1000),
-        ...sample,
-      };
-      setItems((arr) => [ev, ...arr].slice(0, 100));
-    }, 2000);
-    return () => clearInterval(id);
-  }, [live, frozen, feed.source]);
+  }, [feed.source, fromApi, live, frozen]);
 
   const toggle = (k: FullEvent['category']) =>
     setActive((s) => (s.includes(k) ? s.filter((x) => x !== k) : [...s, k]));

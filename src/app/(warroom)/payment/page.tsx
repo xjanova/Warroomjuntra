@@ -565,6 +565,11 @@ export default function PaymentPage() {
                   <span className="mono w-28 text-right text-fg shrink-0">฿{l.balance.toLocaleString()}</span>
                 </div>
               ))}
+              {LEDGER.length === 0 && (
+                <div className="p-8 text-center text-2xs text-mute">
+                  ยังไม่มีสมุดบัญชีรายวัน — รอ endpoint ฝั่ง admin API
+                </div>
+              )}
             </div>
           </section>
 
@@ -573,32 +578,38 @@ export default function PaymentPage() {
               <span className="t-h">สรุปวันนี้</span>
             </div>
             <div className="p-4 space-y-3 text-sm">
-              <div className="flex justify-between"><span className="text-dim">ยอดเข้า</span><span className="mono text-ok font-semibold">+฿48,290</span></div>
-              <div className="flex justify-between"><span className="text-dim">คืนเงิน</span><span className="mono text-crit">−฿599</span></div>
-              <div className="flex justify-between"><span className="text-dim">คอมมิชชั่นจ่าย</span><span className="mono text-mystic">−฿22,200</span></div>
+              {/* 🧹 (2026-06-04) Demo numbers removed — the daily ledger summary
+                  needs an admin-API endpoint. Until then this shows "—", not
+                  fabricated totals. Real money-in is on the "จับคู่" tab. */}
+              <div className="text-2xs text-mute bg-panel2 border border-line rounded px-2 py-1.5 leading-relaxed">
+                สรุปสมุดบัญชีรอ endpoint ฝั่ง admin API — ดูยอดเงินเข้าจริงได้ที่แท็บ <span className="text-fg">จับคู่</span> หรือในแอดมินเว็บ
+              </div>
+              <div className="flex justify-between"><span className="text-dim">ยอดเข้า</span><span className="mono text-mute">—</span></div>
+              <div className="flex justify-between"><span className="text-dim">คืนเงิน</span><span className="mono text-mute">—</span></div>
+              <div className="flex justify-between"><span className="text-dim">คอมมิชชั่นจ่าย</span><span className="mono text-mute">—</span></div>
               <div className="border-t border-line pt-3 flex justify-between">
                 <span className="text-fg font-semibold">สุทธิ</span>
-                <span className="mono text-fg text-base font-semibold">฿25,491</span>
+                <span className="mono text-mute text-base font-semibold">—</span>
               </div>
               <div className="border-t border-line pt-3">
                 <div className="t-h mb-2">แยกตามช่องทาง</div>
                 <div className="space-y-1.5 text-xs">
                   <div className="flex justify-between items-center">
                     <span className="text-dim flex items-center gap-1.5"><span className="w-2 h-2 bg-info rounded-sm" />FB Messenger</span>
-                    <span className="mono text-fg">฿28,792</span>
+                    <span className="mono text-mute">—</span>
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-dim flex items-center gap-1.5"><span className="w-2 h-2 bg-ok rounded-sm" />LINE OA</span>
-                    <span className="mono text-fg">฿19,498</span>
+                    <span className="mono text-mute">—</span>
                   </div>
                 </div>
               </div>
               <div className="border-t border-line pt-3">
                 <div className="t-h mb-2">บริการ</div>
                 <div className="space-y-1 text-xs">
-                  <div className="flex justify-between"><span className="text-dim">ดูดวงทั่วไป</span><span className="mono">฿18,490</span></div>
-                  <div className="flex justify-between"><span className="text-dim">Celtic Cross</span><span className="mono text-mystic">฿22,485</span></div>
-                  <div className="flex justify-between"><span className="text-dim">เครดิตเติม</span><span className="mono">฿7,315</span></div>
+                  <div className="flex justify-between"><span className="text-dim">ดูดวงทั่วไป</span><span className="mono text-mute">—</span></div>
+                  <div className="flex justify-between"><span className="text-dim">Celtic Cross</span><span className="mono text-mute">—</span></div>
+                  <div className="flex justify-between"><span className="text-dim">เครดิตเติม</span><span className="mono text-mute">—</span></div>
                 </div>
               </div>
             </div>

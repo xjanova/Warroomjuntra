@@ -11,7 +11,6 @@ import { Pill } from '@/components/ui/Pill';
 import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { userToCustomerCard } from '@/lib/adapters/customers';
 
-const SENTIMENT_30D = 'oooo+ooo-oo+ooo--o+o-oo++oooo-';
 const SENTIMENT_NEUTRAL = 'o'.repeat(30);
 
 export function Customer360Drawer() {
@@ -27,25 +26,26 @@ export function Customer360Drawer() {
     return null;
   }, [detail.data]);
 
-  // Mock fallback when we have no live user (e.g. clicked from a mock-only flow)
+  // 🧹 (2026-06-04) Neutral placeholder when there's no live user yet — no demo
+  //   customer. Real data fills in once useUserDetail resolves.
   const display = card ?? {
     id: 0,
-    name: 'พิมพ์ชนก ส.',
-    psid: '1042883',
+    name: '—',
+    psid: '—',
     channel: 'FB' as const,
-    rarity: 'LEGENDARY' as const,
-    level: 28,
-    exp: 64,
-    vip: true,
+    rarity: 'COMMON' as const,
+    level: 0,
+    exp: 0,
+    vip: false,
     problem: false,
-    ltv: 24599,
-    credits: 142,
-    readings: 189,
+    ltv: 0,
+    credits: 0,
+    readings: 0,
     sentiment: SENTIMENT_NEUTRAL,
   };
 
   const isLive = !!card;
-  const sentimentSeries = isLive ? SENTIMENT_NEUTRAL : SENTIMENT_30D;
+  const sentimentSeries = SENTIMENT_NEUTRAL;
 
   // ── Live recent readings for this user ──
   const [readings, setReadings] = useState<Array<{

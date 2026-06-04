@@ -11,184 +11,25 @@ import type {
   TimelineItem,
 } from './types';
 
-export const KPIS: Kpi[] = [
-  { label: 'ยอดเงินวันนี้', value: '฿48,290', delta: 18, tone: 'ok', color: '#10b981', sub: '฿40,920 เมื่อวาน', spark: [6, 10, 8, 12, 11, 15, 13, 17, 18] },
-  { label: 'จำนวนดูดวง', value: '342', delta: 12, tone: 'ok', color: '#22d3ee', sub: '305 เมื่อวาน', spark: [8, 10, 9, 12, 11, 14, 13, 16, 15] },
-  { label: 'ลูกค้าใหม่', value: '27', delta: -8, tone: 'warn', color: '#f59e0b', sub: '29 เมื่อวาน', spark: [12, 10, 11, 8, 10, 9, 11, 8, 9] },
-  { label: '%ปิดการขาย', value: '68%', delta: 5, tone: 'ok', color: '#10b981', sub: '64% เมื่อวาน', spark: [6, 7, 9, 10, 12, 11, 14, 15, 16] },
-  { label: 'ตอบเฉลี่ย', value: '42 วิ', delta: -22, tone: 'ok', color: '#22d3ee', sub: '54 วิ เมื่อวาน', spark: [16, 14, 15, 12, 13, 10, 11, 8, 9] },
-  { label: 'เครดิตฟรีใช้', value: '1,284', delta: 42, tone: 'crit', color: '#f59e0b', sub: '+380 ใน 1 ชม.', spark: [4, 6, 8, 9, 12, 14, 17, 18, 20] },
-];
+// 🧹 (2026-06-04) Demo data removed. The warroom shows REAL data from the admin
+//   API only — these arrays are the not-paired / first-load fallbacks, now empty
+//   so no fabricated rows ever flash on screen. The components already render
+//   honest empty states ("ยังไม่มี…"). EVENT_FILTERS stays — it's UI config
+//   (the category chips), not demo content.
 
-export const ALL_CASES: TriageCase[] = [
-  {
-    id: 'c-pay-001',
-    customer: 'พิมพ์ชนก ส.',
-    channel: 'FB',
-    type: 'payment',
-    severity: 'crit',
-    detail: 'โอน 2,500฿ ผ่าน KBANK · บิล FB-2026-05-21-0142 ค่า ฿2,499 · ส่วนต่าง +฿1.00',
-    slaDisplay: '-14:00',
-    slaPct: 100,
-    amount: 2500,
-    tags: ['vip'],
-  },
-  {
-    id: 'c-sens-002',
-    customer: 'วรากร พ.',
-    channel: 'FB',
-    type: 'sensitive',
-    severity: 'crit',
-    detail: 'โพสต์ใน inbox: "จะคืนเงิน ขู่ว่าจะรีวิว 1 ดาว" · mood ระดับ 5',
-    slaDisplay: '-08:24',
-    slaPct: 100,
-    meta: 'mood 5',
-    tags: ['mood5'],
-  },
-  {
-    id: 'c-celtic-003',
-    customer: 'ธนกฤต ภ.',
-    channel: 'LINE',
-    type: 'celtic',
-    severity: 'crit',
-    detail: 'Celtic Cross "การงานปีหน้า" · จ่ายแล้ว ฿1,499 · ค้าง 52 นาที',
-    slaDisplay: '-22:00',
-    slaPct: 100,
-    amount: 1499,
-  },
-  {
-    id: 'c-reading-004',
-    customer: 'ปวีณา ก.',
-    channel: 'LINE',
-    type: 'reading',
-    severity: 'warn',
-    detail: 'คำทำนาย "ความรัก 3 เดือน" · qwen-72b · timeout retry × 2',
-    slaDisplay: '02:14',
-    slaPct: 72,
-    amount: 299,
-  },
-  {
-    id: 'c-refund-005',
-    customer: 'ชาตรี ว.',
-    channel: 'FB',
-    type: 'refund',
-    severity: 'warn',
-    detail: 'ขอคืนเงิน ฿599 — "AI ตอบไม่ตรงคำถาม" · มีหลักฐานสกรีน 3 รูป',
-    slaDisplay: '04:30',
-    slaPct: 60,
-    amount: 599,
-  },
-  {
-    id: 'c-bot-006',
-    customer: '(บอท)',
-    channel: 'LINE',
-    type: 'boterr',
-    severity: 'warn',
-    detail: 'webhook LINE → AI gemini ตอบกลับ 500 · 3 ครั้งใน 5 นาที',
-    slaDisplay: '-01:12',
-    slaPct: 100,
-    meta: 'system',
-  },
-  {
-    id: 'c-floating-007',
-    customer: 'อภิญญา ม.',
-    channel: 'FB',
-    type: 'floating',
-    severity: 'warn',
-    detail: 'บิลลอย ฿299 — ยังไม่ตรวจพบ SMS เงินเข้า · 18 นาที',
-    slaDisplay: '05:45',
-    slaPct: 55,
-    amount: 299,
-  },
-  {
-    id: 'c-block-008',
-    customer: 'สมชาย จ.',
-    channel: 'LINE',
-    type: 'sensitive',
-    severity: 'warn',
-    detail: 'budget_blocked = true · ใช้เครดิตฟรีหมด ขอคุยแม่หมอจริง',
-    slaDisplay: '07:20',
-    slaPct: 42,
-    meta: 'budget block',
-  },
-  {
-    id: 'c-saved-009',
-    customer: 'ภัทรพล ค.',
-    channel: 'FB',
-    type: 'boterr',
-    severity: 'low',
-    detail: 'AI ตอบไม่ได้: "มีโอกาสได้กลับมาคบกันมั้ย แม่หมอช่วยตอบหน่อย"',
-    slaDisplay: '14:08',
-    slaPct: 18,
-    meta: 'saved Q',
-  },
-  {
-    id: 'c-reading-010',
-    customer: 'จิราพร ส.',
-    channel: 'LINE',
-    type: 'reading',
-    severity: 'low',
-    detail: 'คำทำนายดวงรายเดือน · groq-llama · pending 90 วินาที',
-    slaDisplay: '15:30',
-    slaPct: 12,
-    amount: 199,
-  },
-];
+export const KPIS: Kpi[] = [];
 
-export const FOLLOWUPS: Followup[] = [
-  { id: 'fu1', customer: 'ละมัย ป.', service: 'ดูดวงเร่งด่วน 3 ใบ', channel: 'FB', bill: 'FB-0149', amount: 299, silentMin: 2, vip: false },
-  { id: 'fu2', customer: 'กฤษณ์ ส.', service: 'Celtic Cross การงาน', channel: 'LINE', bill: 'LN-3301', amount: 1499, silentMin: 4, vip: true },
-  { id: 'fu3', customer: 'ปิยะดา ก.', service: 'แพ็ค 5 ครั้ง', channel: 'FB', bill: 'FB-0147', amount: 599, silentMin: 8, vip: false },
-  { id: 'fu4', customer: 'สุนิสา ม.', service: 'ดูดวงรายเดือน', channel: 'LINE', bill: 'LN-3298', amount: 299, silentMin: 15, vip: false },
-  { id: 'fu5', customer: 'กิตติชัย ฉ.', service: 'เครดิต 50 ครั้ง', channel: 'FB', bill: 'FB-0145', amount: 1990, silentMin: 18, vip: true },
-  { id: 'fu6', customer: 'พรทิพย์ จ.', service: 'ทาโรต์ใบเดียว', channel: 'FB', bill: 'FB-0141', amount: 99, silentMin: 28, vip: false },
-];
+export const ALL_CASES: TriageCase[] = [];
 
-export const CHATS: Chat[] = [
-  { id: 'ch1', name: 'พิมพ์ชนก ส.', channel: 'FB', bot: false, takenBy: { initial: 'AN', color: '#22d3ee' }, sentiment: 'angry', last: 'ทำไมโอนแล้วยังไม่ได้คำตอบคะ', silentSec: 42 },
-  { id: 'ch2', name: 'ปวีณา ก.', channel: 'LINE', bot: true, sentiment: 'neutral', last: '(บอทกำลังพิมพ์...) ตามดวงของคุณในเดือนนี้', silentSec: 8 },
-  { id: 'ch3', name: 'วรากร พ.', channel: 'FB', bot: false, takenBy: { initial: 'NT', color: '#10b981' }, sentiment: 'angry', last: 'ถ้าไม่คืนเงินจะไปรีวิวให้ดู', silentSec: 215 },
-  { id: 'ch4', name: 'ธนกฤต ภ.', channel: 'LINE', bot: false, takenBy: { initial: 'BE', color: '#8b5cf6' }, sentiment: 'neutral', last: 'รอคำตอบ Celtic Cross ครับ', silentSec: 312 },
-  { id: 'ch5', name: 'อภิญญา ม.', channel: 'FB', bot: true, sentiment: 'happy', last: 'ขอบคุณค่า แม่หมอ ❤️', silentSec: 14 },
-  { id: 'ch6', name: 'จิราพร ส.', channel: 'LINE', bot: true, sentiment: 'neutral', last: 'ดูดวงรายเดือนหน่อยค่ะ', silentSec: 6 },
-  { id: 'ch7', name: 'สมชาย จ.', channel: 'LINE', bot: false, takenBy: { initial: 'PD', color: '#f59e0b' }, sentiment: 'neutral', last: 'ขอคุยแม่หมอจริงครับ', silentSec: 128 },
-  { id: 'ch8', name: 'ภัทรพล ค.', channel: 'FB', bot: true, sentiment: 'neutral', last: 'อยากรู้ว่าเขาคิดยังไงกับเรา', silentSec: 24 },
-  { id: 'ch9', name: 'ชาตรี ว.', channel: 'FB', bot: false, takenBy: { initial: 'AN', color: '#22d3ee' }, sentiment: 'angry', last: 'คืนเงินด้วยครับ', silentSec: 18 },
-  { id: 'ch10', name: 'มนัสนันท์ ป.', channel: 'LINE', bot: true, sentiment: 'happy', last: 'แม่นมากค่า', silentSec: 3 },
-  { id: 'ch11', name: 'กิตติ ส.', channel: 'FB', bot: true, sentiment: 'neutral', last: 'เครดิตเหลือกี่ครั้งคะ', silentSec: 15 },
-  { id: 'ch12', name: 'รัตนา ฉ.', channel: 'LINE', bot: true, sentiment: 'happy', last: 'ขอบคุณค่าแม่นมาก', silentSec: 88 },
-];
+export const FOLLOWUPS: Followup[] = [];
 
-export const SYSTEM: SystemService[] = [
-  { name: 'Webhook · Facebook Messenger', status: 'ok', metric: '128ms' },
-  { name: 'Webhook · LINE OA', status: 'ok', metric: '94ms' },
-  { name: 'AI · Gemini Pro', status: 'ok', metric: '342ms · 0.2% err' },
-  { name: 'AI · Groq Llama', status: 'ok', metric: '186ms · 0% err' },
-  { name: 'AI · Qwen-72B', status: 'warn', metric: '1.4s · 4% err' },
-  { name: 'TTS · ElevenLabs', status: 'ok', metric: '480ms' },
-  { name: 'SMS Bank Parser (KBANK)', status: 'ok', metric: '12 ใน 1 ชม.' },
-  { name: 'SMS Bank Parser (SCB)', status: 'warn', metric: '3 unparsed' },
-  { name: 'Queue · readings', status: 'warn', metric: '14 รอ · 2 fail' },
-  { name: 'Queue · TTS', status: 'ok', metric: '0 รอ' },
-  { name: 'Scheduler · ดวงรายวัน', status: 'ok', metric: 'next 06:00' },
-  { name: 'Storage R2 · images', status: 'ok', metric: '68% used' },
-];
+export const CHATS: Chat[] = [];
 
-export const APPROVALS: Approval[] = [
-  { id: 'a1', kind: 'COMM', tone: 'mystic', title: 'แม่หมอบี — Celtic Cross 12 ใบ', meta: 'คอมมิชชั่น 15% · พฤษภาคม', amount: 18000 },
-  { id: 'a2', kind: 'BILL', tone: 'warn', title: 'ส่วนต่างยอดโอน คุณพิมพ์ชนก', meta: '+฿1.00 · บิล 0142', amount: 1 },
-  { id: 'a3', kind: 'REFUND', tone: 'crit', title: 'คืนเงิน คุณชาตรี', meta: 'AI ตอบไม่ตรง · 599฿', amount: 599 },
-  { id: 'a4', kind: 'COMM', tone: 'mystic', title: 'แม่หมอบี — รายสัปดาห์', meta: '18 เคส', amount: 4200 },
-  { id: 'a5', kind: 'BILL', tone: 'warn', title: 'เติมเครดิต VIP คุณกฤษณ์', meta: 'แพ็ค 50 ครั้ง', amount: 1990 },
-];
+export const SYSTEM: SystemService[] = [];
 
-export const BOTS: Bot[] = [
-  { id: 'b1', name: 'โพสต์ดวงรายวัน · FB Page', state: 'ok', enabled: true, next: '06:00 พรุ่งนี้', last: '06:00 · OK' },
-  { id: 'b2', name: 'สายมูประจำวัน · LINE OA', state: 'ok', enabled: true, next: '07:30 พรุ่งนี้', last: '07:30 · OK' },
-  { id: 'b3', name: 'แคมเปญ "พฤษภาคม-มู"', state: 'ok', enabled: true, next: '19:00 วันนี้', last: '12:00 · sent 1,240' },
-  { id: 'b4', name: 'ติดตามลูกค้าหายไป 7 วัน', state: 'warn', enabled: true, next: '18:00 วันนี้', last: 'เมื่อวาน · 12 fail' },
-  { id: 'b5', name: 'แจ้งเครดิตใกล้หมด', state: 'ok', enabled: false, next: 'ปิดอยู่', last: '5 วันก่อน' },
-];
+export const APPROVALS: Approval[] = [];
+
+export const BOTS: Bot[] = [];
 
 export const EVENT_FILTERS: EventFilter[] = [
   { k: 'payment', tone: 'ok', label: 'จ่ายเงิน' },
@@ -198,34 +39,6 @@ export const EVENT_FILTERS: EventFilter[] = [
   { k: 'audit', tone: 'mystic', label: 'audit' },
 ];
 
-export const EVENTS: EventItem[] = [
-  { id: 1, ts: '14:32:08', kind: 'PAY OK', tone: 'ok', msg: 'รับโอน ฿299 · บิล FB-...0148 · คุณกิตติ ส.', ref: '#0148' },
-  { id: 2, ts: '14:32:01', kind: 'READ', tone: 'info', msg: 'เริ่มคำทำนาย Celtic · คุณรัตนา ฉ. · qwen-72b', ref: 'r-9821' },
-  { id: 3, ts: '14:31:54', kind: 'SENS', tone: 'rose', msg: 'mood ระดับ 5 ตรวจพบในแชต FB · คุณวรากร พ.', ref: 'evt-302' },
-  { id: 4, ts: '14:31:42', kind: 'AUDIT', tone: 'mystic', msg: 'แอน เปิดปากบอทคืนให้คุณอภิญญา ม.', ref: 'log-77' },
-  { id: 5, ts: '14:31:30', kind: 'PAY ?', tone: 'warn', msg: 'SMS KBANK ฿2,500 — ไม่จับคู่บิลอัตโนมัติ', ref: 'sms-918' },
-  { id: 6, ts: '14:31:14', kind: 'SYS', tone: 'warn', msg: 'AI qwen-72b latency 1,420ms (threshold 1,000ms)', ref: 'metric' },
-  { id: 7, ts: '14:30:55', kind: 'READ', tone: 'info', msg: 'เสร็จคำทำนาย "ความรัก 3 เดือน" · 38 วินาที', ref: 'r-9819' },
-  { id: 8, ts: '14:30:42', kind: 'PAY OK', tone: 'ok', msg: 'รับโอน ฿199 · บิล LINE-...3299 · คุณจิราพร ส.', ref: '#3299' },
-  { id: 9, ts: '14:30:30', kind: 'AUDIT', tone: 'mystic', msg: 'นัท รับเคส c-sens-002', ref: 'log-76' },
-  { id: 10, ts: '14:30:18', kind: 'AI ?', tone: 'warn', msg: 'AI ตอบไม่ได้: "แฟนชอบเราจริงมั้ย แม่หมอ"', ref: 'saved-12' },
-  { id: 11, ts: '14:30:04', kind: 'READ', tone: 'info', msg: 'เริ่มดูดวงเร่งด่วน · คุณมนัสนันท์', ref: 'r-9818' },
-  { id: 12, ts: '14:29:51', kind: 'BOT', tone: 'ok', msg: 'โพสต์ดวงรายวัน FB Page เผยแพร่แล้ว · เข้าถึง 8.4k', ref: 'post-451' },
-  { id: 13, ts: '14:29:34', kind: 'PAY OK', tone: 'ok', msg: 'รับโอน ฿1,499 · Celtic · คุณกฤษณ์ ส.', ref: '#0145' },
-  { id: 14, ts: '14:29:12', kind: 'SENS', tone: 'rose', msg: 'budget_blocked = true · คุณสมชาย จ.', ref: 'evt-301' },
-];
+export const EVENTS: EventItem[] = [];
 
-export const CASE_TIMELINE: TimelineItem[] = [
-  { ts: '14:18:42', icon: '💰', tone: 'warn', title: 'SMS ธนาคารเข้า', desc: 'KBANK xxx-2841 รับ ฿2,500.00 จาก *PIMCHANOK S*' },
-  { ts: '14:18:48', icon: '⚠', tone: 'crit', title: 'จับคู่บิลล้มเหลว', desc: 'ไม่พบบิลค้างจำนวน ฿2,500.00 (ใกล้สุดคือ ฿2,499)' },
-  { ts: '14:19:12', icon: '🤖', tone: 'info', title: 'บอทตอบลูกค้า', desc: '"ระบบกำลังตรวจสอบยอดเงิน รอสักครู่นะคะ"' },
-  { ts: '14:24:08', icon: '😡', tone: 'rose', title: 'ลูกค้าทักซ้ำ', desc: '"ทำไมโอนแล้วยังไม่ได้คำตอบคะ" — sentiment เปลี่ยนเป็นลบ' },
-  { ts: '14:26:34', icon: '👤', tone: 'info', title: 'แอน รับเคส', desc: 'ปิดปากบอท · เริ่มสนทนาด้วยตัวเอง' },
-  { ts: '14:32:00', icon: '⌛', tone: 'crit', title: 'SLA หมด', desc: 'เคสค้างเกินเกณฑ์ 10 นาที — ยกระดับเป็นวิกฤต' },
-];
-
-export const CRITICAL_ALERT = {
-  msg: 'ยอดโอน 2,500฿ ของคุณพิมพ์ชนก ไม่ตรงบิล (ส่วนต่าง +1฿) · ค้าง 14 นาที',
-  ago: '14 นาทีที่แล้ว',
-  caseId: 'c-pay-001',
-};
+export const CASE_TIMELINE: TimelineItem[] = [];

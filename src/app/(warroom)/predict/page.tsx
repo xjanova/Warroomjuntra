@@ -31,15 +31,6 @@ const TEMPLATES = [
   { id: 'numerology', name: 'ตัวเลขศาสตร์', icon: '🔢', prompt: 'วิเคราะห์ตัวเลขชีวิตของ {name} เกิด {dob} ตามหลัก Pythagorean — แสดง Life Path Number, Expression Number, Birth Day Number พร้อมตีความเป็นภาษาไทย' },
 ];
 
-const SAMPLE_RESULTS: Record<string, string> = {
-  gemini:
-    'จากไพ่ที่จั่วได้ทั้ง 10 ใบ Celtic Cross บอกเล่าเรื่องราวความรักของคุณพิมพ์ชนกได้ชัดเจนค่ะ ✨\n\nใบที่ 1 (ปัจจุบัน): The Tower — บอกถึงความเปลี่ยนแปลงที่เพิ่งเกิดขึ้นในชีวิตรัก ความสัมพันธ์เดิมที่จบลงไม่ได้เกิดจากความผิดของคุณนะคะ แต่เป็นการพังลงของบางสิ่งที่ไม่มั่นคงมาตั้งแต่ต้น\n\nใบที่ 2 (อุปสรรค): Three of Swords (กลับหัว) — แม้จะเจ็บปวด แต่ใจของคุณเริ่มฟื้นตัวแล้วค่ะ คุณกำลังเรียนรู้ที่จะปล่อยวาง\n\nใบที่ 3 (อนาคตใกล้): The Star — สัญญาณดีมากค่ะ ✨ มีคนใหม่กำลังจะเข้ามาในชีวิต ช่วงปลายเดือนกรกฎาคม...',
-  groq:
-    'Celtic Cross spread ของคุณพิมพ์ชนกบ่งบอกถึงการเปลี่ยนผ่านที่สำคัญในเรื่องความรัก:\n\n1. ปัจจุบัน — มีพายุผ่านเข้ามาเร็วๆนี้ ทำให้บางอย่างต้องจบลง\n2. อุปสรรค — ความเจ็บปวดในใจที่ค่อยๆลดลง\n3. อดีต — ความรักที่จริงใจในอดีตที่ทิ้งบทเรียนไว้\n4. อนาคตใกล้ — โอกาสใหม่ที่ส่องประกายความหวัง\n\nคำแนะนำ: ในเดือนนี้ให้เปิดใจรับสิ่งใหม่ ไม่ต้องรีบเข้าหา แต่ให้สังเกตคนรอบข้างที่เข้ามาด้วยความจริงใจค่ะ',
-  qwen:
-    'ตามไพ่ Celtic Cross ที่จั่วได้สำหรับคุณพิมพ์ชนก เรื่องความรักหลังเลิกแฟน:\n\n• สถานการณ์ปัจจุบัน: The Tower ↑ — การพังทลายของความสัมพันธ์เดิมเปิดทางให้กับชีวิตใหม่ คุณกำลังอยู่ในจุดที่เจ็บปวดแต่ก็เป็นจุดเริ่มต้น\n• พลังที่ขัดขวาง: Three of Swords ↓ (กลับหัว) — ความเศร้าเริ่มจางลง แสดงถึงการเยียวยา\n• พื้นฐาน: The Lovers ↑ — ความรักที่ผ่านมาเป็นของจริง แต่ถึงเวลาต้องเดินต่อ\n• อนาคต 3 เดือน: The Star ↑ — โอกาสและความหวังใหม่กำลังก่อตัว\n\nสรุป: คุณกำลังก้าวผ่านช่วงเปลี่ยนผ่าน ซึ่งเจ็บปวดแต่จำเป็น สิ่งดีๆ กำลังรออยู่ในอีกไม่นานค่ะ ✨',
-};
-
 export default function PredictPage() {
   const [selectedTemplate, setSelectedTemplate] = useState(TEMPLATES[0]);
   const [prompt, setPrompt] = useState(TEMPLATES[0].prompt);
@@ -86,12 +77,12 @@ export default function PredictPage() {
         setRunning(false);
       }
     } else {
-      // Unpaired — keep the original mock sequential reveal for demo continuity.
-      enabled.forEach((p, i) => {
-        setTimeout(() => {
-          setResults((r) => ({ ...r, [p.id]: { text: SAMPLE_RESULTS[p.id], latencyMs: 600 + i * 800 } }));
-          if (i === enabled.length - 1) setRunning(false);
-        }, 600 + i * 800);
+      // 🧹 (2026-06-04) No demo readings — require a real connection to run.
+      setRunning(false);
+      pushToast({
+        kind: 'warn',
+        title: 'ยังไม่ได้เชื่อมต่อ API',
+        body: 'เชื่อมต่อใน Settings ก่อนจึงจะรันทดสอบ provider จริงได้',
       });
     }
   };
