@@ -56,14 +56,48 @@ function makeAction(tag: ParsedAction['tag'], args: string[] = []): ParsedAction
   return { tag, args, raw: `[${tag}${argStr}]` };
 }
 
+// Thai counting classifiers — a number sitting directly *before* one of these is
+// a quantity ("3 รายการ", "2 คน", "5 ครั้ง", "60 นาที"), never a target id. Used to
+// reject counts so "อนุมัติถอน 3 รายการล่าสุด" never approves withdrawal #3.
+const CLASSIFIER_RE = /^(?:รายการ|ราย|คน|ครั้ง|รอบ|อัน|ตัว|บิล|ใบ|ข้อความ|ที่|วัน|ชั่วโมง|ชม|นาที|บาท)/;
+
+// An *explicitly marked* id — highest confidence. "#5", "id 5", "no. 5",
+// "reading 5012", "r-5", "เลข 5", "หมายเลข 5", "รายการที่ 5", "ไอดี 5".
+const ID_MARKER_RE = /(?:#\s*|\bid\s+|\bno\.?\s*|reading\s+|\br-|เลขที่\s*|เลข\s*|หมายเลข\s*|รายการที่\s*|ไอดี\s*)#?\s*(\d+)/i;
+
 /**
- * Map a clear management command → a managed action. Requires verb + object + a
- * numeric id; returns null otherwise so casual chatter never triggers a
- * destructive op (and ask-permission mode adds a confirm card on top anyway).
+ * Pull the single unambiguous target id from an utterance, or null.
+ *   1. An explicitly marked id (#5 · "reading 5012" · "เลข 5" · "รายการที่ 5") wins.
+ *   2. Otherwise gather numbers that are NOT Thai counts (not immediately followed
+ *      by a classifier word). Exactly one such number → use it; zero or several →
+ *      null, so we fall through to the LLM rather than act on the wrong target.
+ * Guards against the old "first number anywhere" bug, where "อนุมัติถอน 3 รายการ"
+ * approved withdrawal #3 and "แบน 2 คนนี้ facebook 99887766" banned psid 2.
+ */
+function targetId(u: string): string | null {
+  const marked = u.match(ID_MARKER_RE);
+  if (marked) return marked[1];
+
+  const candidates: string[] = [];
+  const re = /(\d+)\s*([฀-๿a-zA-Z]*)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(u)) !== null) {
+    const following = m[2] ?? '';
+    if (following && CLASSIFIER_RE.test(following)) continue; // it's a count, not an id
+    candidates.push(m[1]);
+  }
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
+/**
+ * Map a clear management command → a managed action. Requires an explicit verb +
+ * object + an unambiguous target id (see targetId). Returns null otherwise so
+ * casual chatter, counts, and multi-number sentences never fire a destructive op.
+ * Classifier-originated managed actions ALWAYS surface a confirm card (the caller
+ * forces ask-permission even in auto mode) — this is the first of several gates.
  */
 function detectManagementIntent(u: string): { action: ParsedAction; ack: string } | null {
-  const m = u.match(/(\d{1,})/);
-  const id = m ? m[1] : null;
+  const id = targetId(u);
   if (!id) return null;
 
   // Withdrawals

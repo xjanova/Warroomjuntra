@@ -83,8 +83,12 @@ export function EveChatBody({
   // either run immediately (โหมด "จัดการเอง" = autoManage) OR get queued as a
   // confirmation card the operator must press ยืนยัน on (โหมด "ขออนุญาต").
   const runActions = useCallback(
-    async (actions: ParsedAction[]): Promise<string[]> => {
-      const autoManage = useSettings.getState().eve.safety.autoManage;
+    async (actions: ParsedAction[], opts?: { forceConfirm?: boolean }): Promise<string[]> => {
+      const settings = useSettings.getState();
+      // forceConfirm (keyword fast-path) overrides "จัดการเอง" → a classifier-
+      // matched managed action ALWAYS queues a confirm card, never auto-runs.
+      const autoManage = settings.eve.safety.autoManage && !opts?.forceConfirm;
+      const connected = isPairedFn(settings);
       const msgs: string[] = [];
 
       const immediate = actions.filter((a) => !isManaged(a.tag));
@@ -96,6 +100,12 @@ export function EveChatBody({
 
       for (const act of actions.filter((a) => isManaged(a.tag))) {
         const { label, kind } = describeAction(act);
+        // Managed actions hit the live admin API — never run or even queue them
+        // while offline (Phase-A intent runs before the paired check).
+        if (!connected) {
+          msgs.push('🔌 ' + label + ' — เชื่อมต่อก่อนถึงจะสั่งจัดการได้ (Settings → การเชื่อมต่อ)');
+          continue;
+        }
         if (autoManage) {
           const res = await executeManagedAction(act);
           msgs.push((res.ok ? '✓ ' : '✗ ') + (res.message ?? label));
@@ -132,7 +142,9 @@ export function EveChatBody({
       if (intent) {
         const ack = intent.spokenAck ?? 'จัดการให้แล้วค่ะ ✦';
         addMessage({ role: 'eve', text: ack });
-        const msgs = await runActions(intent.actions);
+        // forceConfirm: keyword-classifier managed actions always need a confirm
+        // card — only the LLM path (Phase B) may auto-run under "จัดการเอง".
+        const msgs = await runActions(intent.actions, { forceConfirm: true });
         if (msgs.length > 0) {
           addMessage({ role: 'eve', text: '<small class="text-2xs text-mute">' + msgs.join('<br>') + '</small>' });
         }
