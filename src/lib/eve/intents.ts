@@ -57,6 +57,59 @@ function makeAction(tag: ParsedAction['tag'], args: string[] = []): ParsedAction
 }
 
 /**
+ * Map a clear management command → a managed action. Requires verb + object + a
+ * numeric id; returns null otherwise so casual chatter never triggers a
+ * destructive op (and ask-permission mode adds a confirm card on top anyway).
+ */
+function detectManagementIntent(u: string): { action: ParsedAction; ack: string } | null {
+  const m = u.match(/(\d{1,})/);
+  const id = m ? m[1] : null;
+  if (!id) return null;
+
+  // Withdrawals
+  if (/(ปฏิเสธ|ไม่อนุมัติ|reject)/i.test(u) && /(ถอน|withdraw)/i.test(u))
+    return { action: makeAction('REJECT_WD', [id]), ack: `ปฏิเสธถอนเงิน #${id}` };
+  if (/(อนุมัติ|approve)/i.test(u) && /(ถอน|withdraw)/i.test(u))
+    return { action: makeAction('APPROVE_WD', [id]), ack: `อนุมัติถอนเงิน #${id}` };
+
+  // SMS reconciliation
+  if (/(ปฏิเสธ|reject)/i.test(u) && /sms/i.test(u))
+    return { action: makeAction('REJECT_SMS', [id]), ack: `ปฏิเสธ SMS #${id}` };
+  if (/(จับคู่|match|ยืนยัน)/i.test(u) && /sms/i.test(u))
+    return { action: makeAction('MATCH_SMS', [id]), ack: `จับคู่ SMS #${id}` };
+
+  // Bans (check ปลดแบน before แบน)
+  if (/(ปลดแบน|เลิกแบน|unban)/i.test(u))
+    return { action: makeAction('UNBAN', [id]), ack: `ปลดแบน #${id}` };
+  if (/(แบน|ban)/i.test(u)) {
+    const plat = /line|ไลน์/i.test(u) ? 'line' : 'facebook';
+    return { action: makeAction('BAN', [plat, id]), ack: `แบน ${plat} ${id}` };
+  }
+
+  // Reading / bill operations
+  if (/(คืนเงิน|refund)/i.test(u))
+    return { action: makeAction('REFUND', [id]), ack: `คืนเงิน reading ${id}` };
+  if (/(ยกเลิก|cancel)/i.test(u))
+    return { action: makeAction('CANCEL', [id]), ack: `ยกเลิก reading ${id}` };
+  if (/(ยืนยัน.*(จ่าย|ชำระ)|จ่ายแล้ว|กู้บิล|mark.*paid|ชำระแล้ว)/i.test(u))
+    return { action: makeAction('MARK_PAID', [id]), ack: `ยืนยันชำระเงิน reading ${id}` };
+
+  // Chat takeover / resume
+  if (/(คืนงาน|คืนบอท|resume.*bot)/i.test(u))
+    return { action: makeAction('RESUME_BOT', [id]), ack: `คืนงานให้บอท reading ${id}` };
+  if (/(รับช่วง|takeover|เทคโอเวอร์)/i.test(u))
+    return { action: makeAction('TAKEOVER', [id]), ack: `รับช่วงต่อจากบอท reading ${id}` };
+
+  // Bots / providers — needs the word บอท/bot or provider + an on/off/toggle verb
+  if (/(provider|โพรไวเดอร์)/i.test(u) && /(เปิด|ปิด|สลับ|toggle)/i.test(u))
+    return { action: makeAction('TOGGLE_PROVIDER', [id]), ack: `สลับ provider #${id}` };
+  if (/(บอท|bot)/i.test(u) && /(เปิด|ปิด|สลับ|toggle)/i.test(u))
+    return { action: makeAction('TOGGLE_BOT', [id]), ack: `สลับสถานะบอท #${id}` };
+
+  return null;
+}
+
+/**
  * Inspect the user's utterance and return any actions we can confidently
  * execute right now. Returns null if no obvious intent matched — caller
  * should send to the LLM and use whatever it emits.
@@ -140,6 +193,14 @@ export function detectIntent(utterance: string): IntentMatch | null {
   if (HIDE_EVE_RE.test(u)) {
     actions.push(makeAction('HIDE_EVE'));
     acks.push('ซ่อน Eve');
+  }
+
+  // 7. Management tools (approve/refund/cancel/ban/toggle…). Conservative — needs
+  //    an explicit verb+object+id so a casual message never fires by accident.
+  const mgmt = detectManagementIntent(u);
+  if (mgmt) {
+    actions.push(mgmt.action);
+    acks.push(mgmt.ack);
   }
 
   if (actions.length === 0) return null;

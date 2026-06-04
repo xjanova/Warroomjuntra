@@ -1040,13 +1040,32 @@ function EveSafetyPanel() {
     <div className="panel p-3 space-y-3">
       <div className="t-h">ความปลอดภัย</div>
 
-      <div className="flex items-start gap-2">
-        <span className="text-ok mt-0.5">🛡</span>
-        <div>
-          <div className="text-fg">Eve ไม่ลงมือทำคำสั่งเสี่ยงเอง</div>
-          <div className="text-2xs text-mute">
-            อนุมัติถอน / refund / cancel / ban — Eve จะ &quot;เสนอ&quot; ผ่าน toast เสมอ ให้คุณกดทำเองในหน้าที่เกี่ยวข้อง (ออกแบบให้ปลอดภัยโดยค่าเริ่มต้น ไม่มีสวิตช์ปิด)
-          </div>
+      {/* 🤖 (2026-06-04) Two operating modes for Eve's management tools. */}
+      <div>
+        <div className="text-fg mb-1.5">โหมดการจัดการของ Eve</div>
+        <div className="grid grid-cols-2 gap-1.5">
+          <button
+            type="button"
+            onClick={() => setEveSafety({ autoManage: false })}
+            className={cn(
+              'rounded border px-2 py-1.5 text-left transition',
+              !safety.autoManage ? 'border-ok/60 bg-ok/10' : 'border-line bg-panel2 hover:border-line',
+            )}
+          >
+            <div className="text-xs font-semibold text-fg">🔐 ขออนุญาต</div>
+            <div className="text-2xs text-mute mt-0.5">Eve ขึ้นการ์ดให้กดยืนยันก่อนทำงานเสี่ยง (แนะนำ)</div>
+          </button>
+          <button
+            type="button"
+            onClick={() => setEveSafety({ autoManage: true })}
+            className={cn(
+              'rounded border px-2 py-1.5 text-left transition',
+              safety.autoManage ? 'border-warn/60 bg-warn/10' : 'border-line bg-panel2 hover:border-line',
+            )}
+          >
+            <div className="text-xs font-semibold text-fg">⚡ จัดการเอง</div>
+            <div className="text-2xs text-mute mt-0.5">Eve ลงมือ อนุมัติ/แบน/คืนเงิน ทันทีไม่ต้องถาม</div>
+          </button>
         </div>
       </div>
 

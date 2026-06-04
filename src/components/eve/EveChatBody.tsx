@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useEve, type EveMood } from '@/lib/stores/eve';
+import { useEve, type EveMood, type PendingAction } from '@/lib/stores/eve';
 import { useWarroom } from '@/lib/stores/warroom';
 import { useSettings, isPaired as isPairedFn } from '@/lib/stores/settings';
 import { eveChat, describeError } from '@/lib/api';
@@ -17,8 +17,13 @@ import {
 import {
   parseActions,
   executeActions,
+  executeManagedAction,
+  isManaged,
+  describeAction,
   stripActionTags,
   buildActionInstructions,
+  type ParsedAction,
+  type ActionTag,
 } from '@/lib/eve/actions';
 import { detectIntent } from '@/lib/eve/intents';
 
@@ -40,7 +45,7 @@ export function EveChatBody({
   compact?: boolean;
   className?: string;
 }) {
-  const { typing, messages, setMood, setTyping, addMessage } = useEve();
+  const { typing, messages, setMood, setTyping, addMessage, pending, addPending, setPendingStatus, removePending } = useEve();
   const [draft, setDraft] = useState('');
   const [listening, setListening] = useState(false);
   const [interim, setInterim] = useState('');
@@ -72,26 +77,68 @@ export function EveChatBody({
     [eveCfg.voice],
   );
 
+  // ── Action orchestrator ─────────────────────────────────────────────────
+  // Non-managed actions (navigate / toggle / open drawer / refresh) run instantly.
+  // Managed actions (approve / refund / cancel / ban / mark-paid / toggle-bot …)
+  // either run immediately (โหมด "จัดการเอง" = autoManage) OR get queued as a
+  // confirmation card the operator must press ยืนยัน on (โหมด "ขออนุญาต").
+  const runActions = useCallback(
+    async (actions: ParsedAction[]): Promise<string[]> => {
+      const autoManage = useSettings.getState().eve.safety.autoManage;
+      const msgs: string[] = [];
+
+      const immediate = actions.filter((a) => !isManaged(a.tag));
+      if (immediate.length > 0) {
+        for (const r of executeActions(immediate)) {
+          if (r.message) msgs.push((r.ok ? '' : '⚠ ') + r.message);
+        }
+      }
+
+      for (const act of actions.filter((a) => isManaged(a.tag))) {
+        const { label, kind } = describeAction(act);
+        if (autoManage) {
+          const res = await executeManagedAction(act);
+          msgs.push((res.ok ? '✓ ' : '✗ ') + (res.message ?? label));
+        } else {
+          addPending({ tag: act.tag, args: act.args, label, kind });
+          msgs.push('🔐 รออนุญาต: ' + label);
+        }
+      }
+      return msgs;
+    },
+    [addPending],
+  );
+
+  // Operator pressed ยืนยัน on a queued card → run it for real.
+  const confirmPending = useCallback(
+    async (p: PendingAction) => {
+      setPendingStatus(p.id, 'running');
+      const res = await executeManagedAction({ tag: p.tag as ActionTag, args: p.args, raw: '' });
+      setPendingStatus(p.id, res.ok ? 'done' : 'error', res.message ?? (res.ok ? 'สำเร็จ' : 'ล้มเหลว'));
+      setMood(res.ok ? 'happy' : 'concerned');
+      setTimeout(() => removePending(p.id), 3500);
+    },
+    [setPendingStatus, removePending, setMood],
+  );
+
+  const cancelPending = useCallback((id: string) => removePending(id), [removePending]);
+
   const respond = useCallback(
     async (text: string) => {
       // ── Phase A: client-side intent. If we can satisfy the request locally
-      //    (navigate, refresh, toggle, open drawer), do it now — no LLM round
-      //    trip needed. Eve speaks an immediate ack.
+      //    (navigate, refresh, toggle, open drawer, manage) do it now — no LLM
+      //    round trip needed. Eve speaks an immediate ack.
       const intent = detectIntent(text);
       if (intent) {
-        const results = executeActions(intent.actions);
         const ack = intent.spokenAck ?? 'จัดการให้แล้วค่ะ ✦';
         addMessage({ role: 'eve', text: ack });
+        const msgs = await runActions(intent.actions);
+        if (msgs.length > 0) {
+          addMessage({ role: 'eve', text: '<small class="text-2xs text-mute">' + msgs.join('<br>') + '</small>' });
+        }
         setMood('happy');
         speakReply(ack);
         setTimeout(() => setMood('idle'), 2000);
-
-        // If any action failed (e.g. opened a non-existent drawer), tack on a heads-up.
-        const failed = results.filter((r) => !r.ok);
-        if (failed.length > 0) {
-          const msg = 'แต่มีบางอย่างขัดข้องค่ะ: ' + failed.map((r) => r.message).join(' · ');
-          addMessage({ role: 'eve', text: '<small class="text-2xs">' + msg + '</small>' });
-        }
         return;
       }
 
@@ -132,16 +179,21 @@ export function EveChatBody({
           });
           setTyping(false);
 
-          // Parse any action markers from the reply, execute, strip from display.
+          // Parse any action markers from the reply, run them (mode-gated), strip from display.
           const reply = res.reply || 'Eve ตอบไม่ได้ในตอนนี้ค่ะ';
           const actions = parseActions(reply);
-          if (actions.length > 0) executeActions(actions);
 
           const displayText = stripActionTags(reply).replace(/\n/g, '<br>') ||
             'จัดการให้แล้วค่ะ ✦';
           addMessage({ role: 'eve', text: displayText });
           setMood(res.mood ?? 'talking');
           speakReply(displayText);
+          if (actions.length > 0) {
+            const msgs = await runActions(actions);
+            if (msgs.length > 0) {
+              addMessage({ role: 'eve', text: '<small class="text-2xs text-mute">' + msgs.join('<br>') + '</small>' });
+            }
+          }
           setTimeout(() => setMood('idle'), 2400);
           return;
         } catch (e) {
@@ -163,7 +215,7 @@ export function EveChatBody({
       speakReply(offline);
       setTimeout(() => setMood('idle'), 2400);
     },
-    [paired, messages, setMood, setTyping, addMessage, eveCfg.provider, eveCfg.model, eveCfg.temperature, eveCfg.maxTokens, eveCfg.passContext, actionInstructions, speakReply],
+    [paired, messages, setMood, setTyping, addMessage, eveCfg.provider, eveCfg.model, eveCfg.temperature, eveCfg.maxTokens, eveCfg.passContext, actionInstructions, speakReply, runActions],
   );
 
   const onAction = useCallback((action: string) => {
@@ -310,6 +362,47 @@ export function EveChatBody({
             {interim && <div className="text-fg mt-0.5">{interim}</div>}
           </div>
         )}
+
+        {/* 🤖 (2026-06-04) Pending management actions — "ขออนุญาต" mode confirm cards. */}
+        {pending.map((p) => (
+          <div
+            key={p.id}
+            className={cn(
+              'rounded border px-2.5 py-2 my-1 text-fg',
+              p.kind === 'crit'
+                ? 'border-crit/50 bg-crit/10'
+                : p.kind === 'warn'
+                ? 'border-warn/50 bg-warn/10'
+                : 'border-ok/50 bg-ok/10',
+            )}
+          >
+            <div className="flex items-center gap-1.5 text-2xs">
+              <span>🔐</span>
+              <span className="font-semibold flex-1">{p.label}</span>
+            </div>
+            {p.status === 'pending' && (
+              <div className="flex gap-1 mt-1.5">
+                <button
+                  type="button"
+                  className="btn btn-ok flex-1 justify-center text-2xs py-1"
+                  onClick={() => void confirmPending(p)}
+                >
+                  ✓ ยืนยัน
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost flex-1 justify-center text-2xs py-1"
+                  onClick={() => cancelPending(p.id)}
+                >
+                  ✕ ยกเลิก
+                </button>
+              </div>
+            )}
+            {p.status === 'running' && <div className="text-2xs text-mute mt-1">⏳ กำลังทำ…</div>}
+            {p.status === 'done' && <div className="text-2xs text-ok mt-1">✓ {p.result}</div>}
+            {p.status === 'error' && <div className="text-2xs text-crit mt-1">✗ {p.result}</div>}
+          </div>
+        ))}
       </div>
 
       <div className={compact ? 'eve-quick' : 'eve-quick eve-quick-lg'}>

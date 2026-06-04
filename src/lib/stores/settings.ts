@@ -70,8 +70,14 @@ export type EveVoiceSpeak = {
 };
 
 export type EveSafetyConfig = {
-  confirmDestructive: boolean; // Eve must propose (toast) instead of executing approve/reject/refund/cancel
+  confirmDestructive: boolean; // legacy — superseded by autoManage (kept for migrate compat)
   allowAutonomousNavigate: boolean; // false = even GOTO needs operator click; true = execute immediately
+  // 🤖 (2026-06-04) The two operating modes for Eve's management tools:
+  //   true  = "จัดการเอง" — Eve runs approve/refund/cancel/ban/mark-paid/toggle
+  //           directly the moment she decides.
+  //   false = "ขออนุญาต" — Eve queues each action as a confirmation card and waits
+  //           for the operator to press ยืนยัน. Default false (safer).
+  autoManage: boolean;
 };
 
 export type EveConfig = {
@@ -184,6 +190,7 @@ const DEFAULT_EVE: EveConfig = {
   safety: {
     confirmDestructive: true,
     allowAutonomousNavigate: true,
+    autoManage: false, // ask-permission by default
   },
 };
 
@@ -297,21 +304,22 @@ export const useSettings = create<SettingsState>()(
     {
       name: 'warroom-settings.v1',
       storage: createJSONStorage(() => localStorage),
-      version: 2,
-      // Old v1 payloads predate eve.voice / eve.safety. Fill missing defaults
-      // before zustand merges into state (otherwise EveChatBody crashes on first
-      // render with `Cannot read properties of undefined (reading 'speak')`).
+      version: 3,
+      // v1 predates eve.voice/eve.safety; v3 adds eve.safety.autoManage. Normalize
+      // the eve config against current defaults so older payloads never leave a
+      // nested field undefined (EveChatBody/actions read safety.autoManage etc.).
       migrate: (persisted, fromVersion) => {
         const p = (persisted ?? {}) as Partial<SettingsState>;
-        if (fromVersion < 2 && p.eve) {
+        if (fromVersion < 3 && p.eve) {
+          const e = p.eve as Partial<EveConfig>;
           p.eve = {
             ...DEFAULT_EVE,
-            ...p.eve,
+            ...e,
             voice: {
-              listen: { ...DEFAULT_EVE.voice.listen, ...((p.eve as Partial<EveConfig>).voice?.listen ?? {}) },
-              speak: { ...DEFAULT_EVE.voice.speak, ...((p.eve as Partial<EveConfig>).voice?.speak ?? {}) },
+              listen: { ...DEFAULT_EVE.voice.listen, ...(e.voice?.listen ?? {}) },
+              speak: { ...DEFAULT_EVE.voice.speak, ...(e.voice?.speak ?? {}) },
             },
-            safety: { ...DEFAULT_EVE.safety, ...((p.eve as Partial<EveConfig>).safety ?? {}) },
+            safety: { ...DEFAULT_EVE.safety, ...(e.safety ?? {}) },
           };
         }
         return p as SettingsState;
