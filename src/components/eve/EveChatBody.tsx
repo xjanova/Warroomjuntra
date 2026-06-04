@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useEve, type EveMood, type PendingAction } from '@/lib/stores/eve';
 import { useWarroom } from '@/lib/stores/warroom';
 import { useSettings, isPaired as isPairedFn } from '@/lib/stores/settings';
-import { eveChat, describeError } from '@/lib/api';
+import { eveChat, fetchEveSignals, describeError, type EveSignals } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import {
   startListening,
@@ -37,6 +37,37 @@ const QUICK_ACTIONS = [
   { label: '💰 ยอดวันนี้', prompt: 'ยอดเงินวันนี้เป็นยังไง' },
   { label: '🤖 สถานะบอท', prompt: 'บอทเป็นยังไง' },
 ];
+
+// Compact the live /eve/signals snapshot into the chat `context.state` so the
+// backend folds REAL War Room numbers into Eve's system prompt — she answers
+// "เคสด่วน / ยอดวันนี้ / ค้างกี่ราย" with facts and proposes precise actions instead
+// of guessing. Drops generated_at (noise) and keeps the decision-relevant figures.
+function buildStateContext(s: EveSignals): Record<string, unknown> {
+  return {
+    headline: s.alert.headline,
+    alert_level: s.alert.level,
+    fortune: {
+      stuck_paid: s.fortune.stuck_paid,
+      oldest_stuck_paid_min: s.fortune.oldest_stuck_paid_min,
+      lead_count: s.fortune.lead_count,
+      unpaid_followups: s.fortune.unpaid_followups,
+      triage_crit: s.fortune.triage_crit,
+      triage_warn: s.fortune.triage_warn,
+      completed_15m: s.fortune.completed_15m,
+      failed_15m: s.fortune.failed_15m,
+    },
+    finance: {
+      withdrawals_pending: s.finance.withdrawals_pending,
+      sms_unmatched: s.finance.sms_unmatched,
+    },
+    ai_pool: {
+      providers_offline: s.ai_pool.providers_offline,
+      keys_active: s.ai_pool.keys_active,
+      error_rate_15m_pct: s.ai_pool.error_rate_15m_pct,
+    },
+    moderation: { suspects: s.moderation.suspects, banned_active: s.moderation.banned_active },
+  };
+}
 
 export function EveChatBody({
   compact = true,
@@ -134,11 +165,13 @@ export function EveChatBody({
   const cancelPending = useCallback((id: string) => removePending(id), [removePending]);
 
   const respond = useCallback(
-    async (text: string) => {
+    async (text: string, opts?: { forceLLM?: boolean }) => {
       // ── Phase A: client-side intent. If we can satisfy the request locally
       //    (navigate, refresh, toggle, open drawer, manage) do it now — no LLM
       //    round trip needed. Eve speaks an immediate ack.
-      const intent = detectIntent(text);
+      //    forceLLM (quick-action info questions) skips this so Eve ANSWERS with
+      //    live data instead of just navigating to a page.
+      const intent = opts?.forceLLM ? null : detectIntent(text);
       if (intent) {
         const ack = intent.spokenAck ?? 'จัดการให้แล้วค่ะ ✦';
         addMessage({ role: 'eve', text: ack });
@@ -170,6 +203,18 @@ export function EveChatBody({
             content: stripActionTags(m.text.replace(/<[^>]+>/g, '')).slice(0, 500),
           }));
 
+        // Gather the live signals snapshot so Eve reasons over REAL numbers
+        // (stuck-paid, pending withdrawals, triage…). Best-effort — if it fails
+        // Eve still answers, just without situational state.
+        let stateCtx: Record<string, unknown> | undefined;
+        if (eveCfg.passContext) {
+          try {
+            stateCtx = buildStateContext(await fetchEveSignals());
+          } catch {
+            /* situational data is optional */
+          }
+        }
+
         try {
           const res = await eveChat({
             message: text,
@@ -178,14 +223,15 @@ export function EveChatBody({
             model: eveCfg.model,
             temperature: eveCfg.temperature,
             max_tokens: eveCfg.maxTokens,
-            // Inject the action vocabulary via context so the LLM (if backend
-            // includes context.tools in its system prompt) emits [TAG:args]
-            // markers. If backend ignores `tools`, we still get a plain reply.
+            // Inject the action vocabulary (tools) + live state via context. The
+            // backend folds tools into the system prompt (untruncated) so the LLM
+            // emits [TAG:args] markers, and state so it answers with real numbers.
             context: eveCfg.passContext
               ? {
                   source: 'warroom-dock',
                   ts: new Date().toISOString(),
                   tools: actionInstructions,
+                  state: stateCtx,
                 }
               : undefined,
           });
@@ -243,7 +289,9 @@ export function EveChatBody({
   const onQuick = useCallback(
     (prompt: string) => {
       addMessage({ role: 'user', text: prompt });
-      respond(prompt);
+      // Quick actions are informational — always answer via the LLM (with live
+      // state), never short-circuit into a navigation intent.
+      respond(prompt, { forceLLM: true });
     },
     [addMessage, respond],
   );
