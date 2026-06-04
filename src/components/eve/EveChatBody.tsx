@@ -22,56 +22,9 @@ import {
 } from '@/lib/eve/actions';
 import { detectIntent } from '@/lib/eve/intents';
 
-type Responder = { match: RegExp; mood: EveMood; reply: string };
-
-const RESPONDERS: Responder[] = [
-  {
-    match: /(สรุป|สรุปคิว|status|สรุปสถานการณ์|รายงาน)/i,
-    mood: 'talking',
-    reply:
-      'ขอสรุปให้ค่ะ ✦<br>· เคสวิกฤต <b>3</b> · เคสเตือน <b>5</b> · ติดตามด่วน <b>6</b><br>· ยอดเงินวันนี้ <b>฿48,290</b> (▲ 18%)<br>· ตอบเฉลี่ย <b>42 วินาที</b><br>· AI <b>qwen-72b</b> ช้ากว่า threshold · แนะนำให้สลับไป gemini-pro ชั่วคราวค่ะ',
-  },
-  {
-    match: /(วิกฤต|crit|critical|ด่วน|urgent)/i,
-    mood: 'concerned',
-    reply:
-      'เคสวิกฤตที่สุดตอนนี้คือ <b class="lnk" data-action="open-crit">คุณพิมพ์ชนก ส.</b> ยอดโอนไม่ตรงบิล ค้าง 14 นาทีค่ะ — Eve เปิดเคสให้พี่ดูดีกว่ามั้ยคะ?',
-  },
-  {
-    match: /(เงิน|ยอด|รายรับ|revenue|sales)/i,
-    mood: 'happy',
-    reply:
-      'ยอดวันนี้ <b>฿48,290</b> ค่ะ · เพิ่มขึ้น 18% จากเมื่อวาน · Celtic Cross ขายดีที่สุด 12 ใบ ส่วนใหญ่มาจาก LINE OA นะคะ ✦',
-  },
-  {
-    match: /(บอท|bot|automation)/i,
-    mood: 'thinking',
-    reply:
-      'บอทอัตโนมัติ 4 จาก 5 ตัวทำงานปกติค่ะ · มีตัวเดียวที่เตือน — <b>"ติดตามลูกค้าหายไป 7 วัน"</b> มี 12 รายส่งไม่สำเร็จเมื่อวาน · ลองส่งซ้ำมั้ยคะ?',
-  },
-  {
-    match: /(ลูกค้า|customer|พิมพ์ชนก|วรากร|ธนกฤต)/i,
-    mood: 'idle',
-    reply:
-      'พิมพ์ชื่อแล้วกด Enter หรือกด <b>⌘K</b> ได้ค่ะ · Eve เปิด Customer 360 ของคุณพิมพ์ชนกไว้แล้ว · เธอเป็น VIP Legendary LV 28 มูลค่ารวม ฿24,599 ค่ะ',
-  },
-  {
-    match: /(ขอบคุณ|thanks|thank you|ดีจ)/i,
-    mood: 'happy',
-    reply: 'ยินดีที่ได้ช่วยพี่ค่ะ ✦ Eve จะคอยจับตาดูคิวให้นะคะ',
-  },
-  {
-    match: /(สวัสดี|hi|hello|hey|ทัก)/i,
-    mood: 'happy',
-    reply: 'สวัสดีค่ะ พี่ ✨ มีอะไรให้ช่วยมั้ยคะ?',
-  },
-  {
-    match: /(เธอคือใคร|who are you|ชื่อ|who)/i,
-    mood: 'idle',
-    reply:
-      'Eve ค่ะ — AI ผู้ช่วยประจำ War Room ของ Juntra · หน้าที่ของ Eve คือคอยสรุปคิว ตอบคำถาม แจ้งเตือนเคสวิกฤต และช่วยพี่ตัดสินใจให้เร็วขึ้นค่ะ ✦',
-  },
-];
+// 🧹 (2026-06-04) Removed the canned demo RESPONDERS — they fabricated metrics
+//   (เคสวิกฤต 3 · ฿48,290 · พิมพ์ชนก VIP). Eve now answers ONLY via the real
+//   /eve/chat LLM when paired; otherwise she's honestly offline (see respond()).
 
 const QUICK_ACTIONS = [
   { label: '📊 สรุปสถานการณ์', prompt: 'สรุปสถานการณ์ตอนนี้' },
@@ -193,7 +146,7 @@ export function EveChatBody({
           return;
         } catch (e) {
           setTyping(false);
-          const err = '<i>ขออภัยค่ะ — เชื่อมต่อ AI ไม่สำเร็จ:</i><br><small class="text-2xs">' + describeError(e) + '</small>';
+          const err = '<i>Eve ออฟไลน์ — เชื่อมต่อ AI ไม่ได้ตอนนี้ค่ะ 🔌</i><br><small class="text-2xs text-mute">' + describeError(e) + '</small>';
           addMessage({ role: 'eve', text: err });
           setMood('concerned');
           setTimeout(() => setMood('idle'), 2400);
@@ -201,17 +154,13 @@ export function EveChatBody({
         }
       }
 
-      // Unpaired → fall back to the canned RESPONDERS so Eve still feels alive.
-      const found = RESPONDERS.find((r) => r.match.test(text));
-      const reply = found
-        ? found.reply
-        : 'เข้าใจค่ะ · Eve ยังเรียนรู้อยู่นะคะ ลองถามแบบ <b>"สรุปสถานการณ์"</b> หรือ <b>"เคสด่วน"</b> ก็ได้ค่ะ ✦';
-      const replyMood: EveMood = found ? found.mood : 'thinking';
-      await new Promise((r) => setTimeout(r, 800 + Math.random() * 500));
+      // 🧹 (2026-06-04) Unpaired → Eve is honestly OFFLINE. No canned demo replies
+      //   (those faked metrics). She only talks via the real LLM when connected.
       setTyping(false);
-      addMessage({ role: 'eve', text: reply });
-      setMood(replyMood);
-      speakReply(reply);
+      const offline = 'Eve ออฟไลน์อยู่ค่ะ — ยังเชื่อมต่อ AI ไม่ได้ 🔌 เชื่อมต่อใน <b>Settings → การเชื่อมต่อ</b> ก่อนถึงจะคุยกับ Eve ได้นะคะ';
+      addMessage({ role: 'eve', text: '<i>' + offline + '</i>' });
+      setMood('concerned');
+      speakReply(offline);
       setTimeout(() => setMood('idle'), 2400);
     },
     [paired, messages, setMood, setTyping, addMessage, eveCfg.provider, eveCfg.model, eveCfg.temperature, eveCfg.maxTokens, eveCfg.passContext, actionInstructions, speakReply],
