@@ -76,7 +76,7 @@ export function EveChatBody({
   compact?: boolean;
   className?: string;
 }) {
-  const { typing, messages, setMood, setTyping, addMessage, pending, addPending, setPendingStatus, removePending } = useEve();
+  const { typing, messages, setMood, setTyping, setAiStatus, addMessage, pending, addPending, setPendingStatus, removePending } = useEve();
   const [draft, setDraft] = useState('');
   const [listening, setListening] = useState(false);
   const [interim, setInterim] = useState('');
@@ -236,6 +236,7 @@ export function EveChatBody({
               : undefined,
           });
           setTyping(false);
+          setAiStatus('online'); // a real reply came back → AI is genuinely reachable
 
           // Parse any action markers from the reply, run them (mode-gated), strip from display.
           const reply = res.reply || 'Eve ตอบไม่ได้ในตอนนี้ค่ะ';
@@ -256,6 +257,7 @@ export function EveChatBody({
           return;
         } catch (e) {
           setTyping(false);
+          setAiStatus('offline'); // chat failed → mark AI unreachable so the badge stops lying
           const err = '<i>Eve ออฟไลน์ — เชื่อมต่อ AI ไม่ได้ตอนนี้ค่ะ 🔌</i><br><small class="text-2xs text-mute">' + describeError(e) + '</small>';
           addMessage({ role: 'eve', text: err });
           setMood('concerned');
@@ -273,7 +275,7 @@ export function EveChatBody({
       speakReply(offline);
       setTimeout(() => setMood('idle'), 2400);
     },
-    [paired, messages, setMood, setTyping, addMessage, eveCfg.provider, eveCfg.model, eveCfg.temperature, eveCfg.maxTokens, eveCfg.passContext, actionInstructions, speakReply, runActions],
+    [paired, messages, setMood, setTyping, setAiStatus, addMessage, eveCfg.provider, eveCfg.model, eveCfg.temperature, eveCfg.maxTokens, eveCfg.passContext, actionInstructions, speakReply, runActions],
   );
 
   const onAction = useCallback((action: string) => {

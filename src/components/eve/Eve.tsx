@@ -106,7 +106,7 @@ export function Eve() {
   const eveEnabled = useSettings((s) => s.eve.enabled);
   const paired = useSettings((s) => isPairedFn(s));
   const {
-    mode, mood,
+    mode, mood, aiStatus,
     setMode, setMood, setTyping, addMessage, clearMessages,
   } = useEve();
   const introPlayed = useRef(false);
@@ -120,6 +120,34 @@ export function Eve() {
     intervalOverride: 30,
   });
   const signals = signalsFeed.source === 'live' ? signalsFeed.data : null;
+
+  // Honest connectivity for the status badge — Eve must NOT claim "online" while
+  // she can't actually reach the AI. Priority:
+  //   not paired                            → 'offline' (no backend at all)
+  //   last chat failed, or AI pool drained  → 'ai-down'
+  //   confirmed chat / healthy pool          → 'online'
+  // keys_active === 0 means zero usable AI keys → always AI-down (a stale prior
+  // 'online' can't mask it); the providers-offline heuristic only fills in the gap
+  // before the first real chat attempt sets aiStatus.
+  const noKeys = signals != null && signals.ai_pool.keys_active === 0;
+  const poolDrained =
+    signals != null &&
+    signals.ai_pool.keys_active > 0 &&
+    signals.ai_pool.providers_offline >= signals.ai_pool.keys_active;
+  const health: 'offline' | 'ai-down' | 'online' = !paired
+    ? 'offline'
+    : noKeys || aiStatus === 'offline' || (aiStatus !== 'online' && poolDrained)
+    ? 'ai-down'
+    : 'online';
+  const healthDot = health === 'online' ? '#10b981' : health === 'ai-down' ? '#f59e0b' : '#6b7280';
+  const healthText =
+    health === 'offline'
+      ? 'ออฟไลน์ · ยังไม่เชื่อมต่อ'
+      : health === 'ai-down'
+      ? 'AI ออฟไลน์ · เชื่อมต่อไม่ได้'
+      : signals
+      ? signals.alert.headline
+      : 'ออนไลน์ · เฝ้าระบบ';
 
   // Track which threshold-crossings we've already announced so Eve doesn't
   // re-narrate the same alert every 30s.
@@ -308,8 +336,8 @@ export function Eve() {
                 Eve <span className="rune">AI · ASSIST</span>
               </span>
               <span className="eve-pill-status">
-                <span className="dot-tiny" />{' '}
-                {signals ? signals.alert.headline : 'ออนไลน์ · เฝ้าระบบ'}
+                <span className="dot-tiny" style={{ background: healthDot, boxShadow: `0 0 6px ${healthDot}` }} />{' '}
+                {healthText}
               </span>
             </span>
             {signals && signals.alert.crit > 0 && (
@@ -371,13 +399,19 @@ export function Eve() {
                   Eve <span className="rune">AI ASSIST</span>
                 </b>
                 <small>
-                  <em>● ฟัง War Room อยู่</em>{' '}
-                  {signals ? (
-                    <span style={{ color: signals.alert.level === 'crit' ? '#fca5a5' : signals.alert.level === 'warn' ? '#fbbf24' : '#34d399' }}>
-                      · {signals.alert.headline}
-                    </span>
+                  {health === 'online' ? (
+                    <>
+                      <em style={{ color: '#34d399' }}>● ฟัง War Room อยู่</em>{' '}
+                      {signals && (
+                        <span style={{ color: signals.alert.level === 'crit' ? '#fca5a5' : signals.alert.level === 'warn' ? '#fbbf24' : '#34d399' }}>
+                          · {signals.alert.headline}
+                        </span>
+                      )}
+                    </>
                   ) : (
-                    <span>· v0.7 · qwen-72b</span>
+                    <em style={{ color: health === 'ai-down' ? '#fbbf24' : '#9ca3af' }}>
+                      {health === 'ai-down' ? '🔌 AI ออฟไลน์ — เชื่อมต่อ AI ไม่ได้' : '○ ออฟไลน์ — ยังไม่เชื่อมต่อ'}
+                    </em>
                   )}
                 </small>
               </div>

@@ -4,6 +4,10 @@ import { create } from 'zustand';
 
 export type EveMode = 'open' | 'min' | 'hidden';
 export type EveMood = 'idle' | 'happy' | 'talking' | 'thinking' | 'concerned' | 'surprise';
+// Real AI-chat reachability, set from the actual /eve/chat outcome (NOT pairing).
+// 'unknown' = not tried yet · 'online' = last chat succeeded · 'offline' = last chat failed.
+// Drives an HONEST status badge so Eve never claims "online" while the AI is unreachable.
+export type EveAiStatus = 'unknown' | 'online' | 'offline';
 
 export type EveMessage = {
   id: string;
@@ -31,6 +35,7 @@ type EveState = {
   mode: EveMode;
   mood: EveMood;
   typing: boolean;
+  aiStatus: EveAiStatus;
   messages: EveMessage[];
   pending: PendingAction[];
   // tunable face geometry (CSS vars)
@@ -43,6 +48,7 @@ type EveState = {
   setMode: (m: EveMode) => void;
   setMood: (m: EveMood) => void;
   setTyping: (v: boolean) => void;
+  setAiStatus: (s: EveAiStatus) => void;
   addMessage: (msg: Omit<EveMessage, 'id' | 'ts'>) => void;
   clearMessages: () => void;
   setFace: (face: Partial<Pick<EveState, 'eyeY' | 'eyeLX' | 'eyeRX' | 'mouthX' | 'mouthY'>>) => void;
@@ -57,6 +63,7 @@ export const useEve = create<EveState>((set) => ({
   mode: 'open',
   mood: 'idle',
   typing: false,
+  aiStatus: 'unknown',
   messages: [],
   pending: [],
   // Calibrated against eve.svg artwork — full-body figure, face in top quarter.
@@ -69,6 +76,7 @@ export const useEve = create<EveState>((set) => ({
   setMode: (mode) => set({ mode }),
   setMood: (mood) => set({ mood }),
   setTyping: (typing) => set({ typing }),
+  setAiStatus: (aiStatus) => set({ aiStatus }),
   addMessage: (msg) =>
     set((s) => ({
       messages: [
