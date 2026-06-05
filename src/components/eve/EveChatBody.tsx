@@ -4,7 +4,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useEve, type EveMood, type PendingAction } from '@/lib/stores/eve';
 import { useWarroom } from '@/lib/stores/warroom';
 import { useSettings, isPaired as isPairedFn } from '@/lib/stores/settings';
-import { eveChat, fetchEveSignals, describeError, type EveSignals } from '@/lib/api';
+import {
+  eveChat,
+  fetchEveSignals,
+  fetchPendingWithdrawals,
+  fetchSmsInbox,
+  describeError,
+  type EveSignals,
+  type WithdrawalRequest,
+  type SmsInboxItem,
+} from '@/lib/api';
 import { cn } from '@/lib/utils';
 import {
   startListening,
@@ -38,12 +47,48 @@ const QUICK_ACTIONS = [
   { label: '🤖 สถานะบอท', prompt: 'บอทเป็นยังไง' },
 ];
 
-// Compact the live /eve/signals snapshot into the chat `context.state` so the
-// backend folds REAL War Room numbers into Eve's system prompt — she answers
-// "เคสด่วน / ยอดวันนี้ / ค้างกี่ราย" with facts and proposes precise actions instead
-// of guessing. Drops generated_at (noise) and keeps the decision-relevant figures.
-function buildStateContext(s: EveSignals): Record<string, unknown> {
-  return {
+// Top pending records (actual rows, not just counts) so Eve can name a SPECIFIC
+// withdrawal/SMS — "อนุมัติถอน #5 ฿2,000 ของคุณสมชาย" — instead of only knowing
+// "5 รายการรออยู่". Kept tiny (top 5, minimal fields) to fit the backend's
+// context.state budget.
+type EveRecords = {
+  withdrawals?: Array<{ id: number; amount: number; name: string }>;
+  sms?: Array<{ id: number; amount: number; bank: string; from: string }>;
+};
+
+// Fetch the top pending withdrawals + unmatched SMS in parallel. Best-effort:
+// either list failing just omits that slice — Eve still answers from the counts.
+async function gatherRecords(): Promise<EveRecords> {
+  const out: EveRecords = {};
+  const [wd, sms] = await Promise.allSettled([
+    fetchPendingWithdrawals(),
+    fetchSmsInbox({ status: 'pending', per_page: 5 }),
+  ]);
+  if (wd.status === 'fulfilled') {
+    const rows: WithdrawalRequest[] = Array.isArray(wd.value) ? wd.value : wd.value.data;
+    out.withdrawals = rows.slice(0, 5).map((w) => ({
+      id: w.id,
+      amount: w.net_amount ?? w.amount,
+      name: w.user?.name ?? `user#${w.user?.id ?? '?'}`,
+    }));
+  }
+  if (sms.status === 'fulfilled') {
+    out.sms = (sms.value.data as SmsInboxItem[]).slice(0, 5).map((s) => ({
+      id: s.id,
+      amount: s.amount,
+      bank: s.bank,
+      from: s.sender_or_receiver ?? '',
+    }));
+  }
+  return out;
+}
+
+// Compact the live /eve/signals snapshot (+ optional pending records) into the
+// chat `context.state` so the backend folds REAL War Room data into Eve's system
+// prompt — she answers "เคสด่วน / ยอดวันนี้ / ค้างกี่ราย" with facts and proposes
+// precise actions on named records instead of guessing.
+function buildStateContext(s: EveSignals, records?: EveRecords): Record<string, unknown> {
+  const out: Record<string, unknown> = {
     headline: s.alert.headline,
     alert_level: s.alert.level,
     fortune: {
@@ -67,6 +112,10 @@ function buildStateContext(s: EveSignals): Record<string, unknown> {
     },
     moderation: { suspects: s.moderation.suspects, banned_active: s.moderation.banned_active },
   };
+  if (records && (records.withdrawals?.length || records.sms?.length)) {
+    out.pending_records = records;
+  }
+  return out;
 }
 
 export function EveChatBody({
@@ -208,10 +257,11 @@ export function EveChatBody({
         // Eve still answers, just without situational state.
         let stateCtx: Record<string, unknown> | undefined;
         if (eveCfg.passContext) {
-          try {
-            stateCtx = buildStateContext(await fetchEveSignals());
-          } catch {
-            /* situational data is optional */
+          // signals (counts) + pending records (actual rows) in parallel — both
+          // best-effort, so a slow/failing list never blocks Eve's reply.
+          const [sig, rec] = await Promise.allSettled([fetchEveSignals(), gatherRecords()]);
+          if (sig.status === 'fulfilled') {
+            stateCtx = buildStateContext(sig.value, rec.status === 'fulfilled' ? rec.value : undefined);
           }
         }
 
