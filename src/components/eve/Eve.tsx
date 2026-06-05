@@ -105,6 +105,7 @@ export function Eve() {
   const pathname = usePathname();
   const eveEnabled = useSettings((s) => s.eve.enabled);
   const paired = useSettings((s) => isPairedFn(s));
+  const connStatus = useSettings((s) => s.connection.status);
   const {
     mode, mood, aiStatus,
     setMode, setMood, setTyping, addMessage, clearMessages,
@@ -134,15 +135,22 @@ export function Eve() {
     signals != null &&
     signals.ai_pool.keys_active > 0 &&
     signals.ai_pool.providers_offline >= signals.ai_pool.keys_active;
+  // Paired but the signals feed itself is erroring (network/500/timeout — NOT a
+  // 401, which already flips `paired` false). Eve's backend is unreachable, so
+  // don't claim online. A confirmed chat (aiStatus==='online') still wins.
+  const signalsErrored = signalsFeed.source === 'error';
   const health: 'offline' | 'ai-down' | 'online' = !paired
     ? 'offline'
-    : noKeys || aiStatus === 'offline' || (aiStatus !== 'online' && poolDrained)
+    : noKeys || aiStatus === 'offline' || (aiStatus !== 'online' && (poolDrained || signalsErrored))
     ? 'ai-down'
     : 'online';
   const healthDot = health === 'online' ? '#10b981' : health === 'ai-down' ? '#f59e0b' : '#6b7280';
+  // 'error' = was paired then the token died / call failed → nudge re-pair.
+  // 'idle'  = never connected this session.
+  const offlineText = connStatus === 'error' ? 'เชื่อมต่อหลุด · ต่อใหม่ใน Settings' : 'ออฟไลน์ · ยังไม่เชื่อมต่อ';
   const healthText =
     health === 'offline'
-      ? 'ออฟไลน์ · ยังไม่เชื่อมต่อ'
+      ? offlineText
       : health === 'ai-down'
       ? 'AI ออฟไลน์ · เชื่อมต่อไม่ได้'
       : signals
@@ -410,7 +418,11 @@ export function Eve() {
                     </>
                   ) : (
                     <em style={{ color: health === 'ai-down' ? '#fbbf24' : '#9ca3af' }}>
-                      {health === 'ai-down' ? '🔌 AI ออฟไลน์ — เชื่อมต่อ AI ไม่ได้' : '○ ออฟไลน์ — ยังไม่เชื่อมต่อ'}
+                      {health === 'ai-down'
+                        ? '🔌 AI ออฟไลน์ — เชื่อมต่อ AI ไม่ได้'
+                        : connStatus === 'error'
+                        ? '🔌 เชื่อมต่อหลุด — ต่อใหม่ใน Settings → การเชื่อมต่อ'
+                        : '○ ออฟไลน์ — ยังไม่เชื่อมต่อ'}
                     </em>
                   )}
                 </small>
