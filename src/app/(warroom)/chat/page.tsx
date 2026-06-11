@@ -206,13 +206,16 @@ function ChatPageInner() {
   const staged = useMemo(() => {
     return threads
       .map((t) => {
+        const base: ChatStage = t.stage ?? 'idle';
         const rid = readingIdOf(t.id);
         const w =
           (rid != null ? inFlightIndex.byReading.get(rid) : undefined) ??
           (t.psid ? inFlightIndex.byPsid.get(t.psid) : undefined);
         const live = !!w && (w.age_seconds ?? 999) <= 60;
-        const stage: ChatStage = live ? 'predicting' : t.stage ?? 'idle';
-        return { t, stage, worker: live ? w : undefined };
+        // Cancelled rows are terminal — a stale worker entry must not revive them.
+        const cancelled = base === 'cancelled_user' || base === 'cancelled_system';
+        const stage: ChatStage = live && !cancelled ? 'predicting' : base;
+        return { t, stage, worker: live && !cancelled ? w : undefined };
       })
       .sort(
         (a, b) =>
@@ -222,10 +225,37 @@ function ChatPageInner() {
   }, [threads, inFlightIndex]);
 
   const stageCounts = useMemo(() => {
-    const c: Record<ChatStage, number> = { predicting: 0, celtic: 0, deciding: 0, waiting: 0, idle: 0 };
+    const c: Record<ChatStage, number> = {
+      predicting: 0, cancelled_user: 0, celtic: 0, deciding: 0, waiting: 0, cancelled_system: 0, idle: 0,
+    };
     for (const s of staged) c[s.stage]++;
     return c;
   }, [staged]);
+
+  // ⏱️ (2026-06-12) ETA for the live countdown on predicting tiles — median
+  //   latency of recent completed calls, per provider (overall as fallback).
+  const predictEta = useMemo(() => {
+    const byProv = new Map<string, number[]>();
+    const all: number[] = [];
+    for (const r of workersFeed.data?.recent_completed ?? []) {
+      if (!r.latency_ms || r.latency_ms <= 0) continue;
+      const s = r.latency_ms / 1000;
+      all.push(s);
+      if (r.provider) {
+        const arr = byProv.get(r.provider) ?? [];
+        arr.push(s);
+        byProv.set(r.provider, arr);
+      }
+    }
+    const median = (a: number[]): number | null => {
+      if (a.length === 0) return null;
+      const sorted = [...a].sort((x, y) => x - y);
+      return sorted[Math.floor(sorted.length / 2)];
+    };
+    const out = new Map<string, number | null>();
+    for (const [p, arr] of byProv) out.set(p, median(arr));
+    return { byProvider: out, overall: median(all) };
+  }, [workersFeed.data]);
 
   // Auto-surface flash — a thread that just ENTERED a hot stage (started
   // picking cards, AI started predicting, bill issued) pulses for a few
@@ -234,11 +264,22 @@ function ChatPageInner() {
   const [flashIds, setFlashIds] = useState<Set<string>>(() => new Set());
   useEffect(() => {
     const prev = prevStagesRef.current;
+    const isFirstPass = Object.keys(prev).length === 0;
     const next: Record<string, ChatStage> = {};
     const newlyHot: string[] = [];
     for (const { t, stage } of staged) {
       next[t.id] = stage;
       if (stage !== prev[t.id] && stage !== 'idle') newlyHot.push(t.id);
+      // 🚨 Customer just killed their own bill — revenue walking out the door.
+      // Crit toast so the operator can chase immediately. Only on a REAL
+      // transition (thread was already tracked, not the initial snapshot).
+      if (!isFirstPass && prev[t.id] !== undefined && prev[t.id] !== 'cancelled_user' && stage === 'cancelled_user') {
+        pushToast({
+          kind: 'crit',
+          title: '🚨 ลูกค้ายกเลิกบิลเอง — ' + t.name,
+          body: (t.due > 0 ? `บิล ฿${t.due.toLocaleString()} หลุดมือ · ` : '') + 'กดเปิดแชทใน มัลติวิว เพื่อตามกลับ',
+        });
+      }
     }
     prevStagesRef.current = next;
     if (newlyHot.length === 0) return;
@@ -251,7 +292,7 @@ function ChatPageInner() {
       });
     }, 6000);
     return () => clearTimeout(timer);
-  }, [staged]);
+  }, [staged, pushToast]);
 
   // 📜 Real recent-reading history for the active customer's sidebar — replaces
   //    the old hardcoded list + the fabricated "ดูดวงทั้งหมด" count. Fetched by
@@ -655,8 +696,28 @@ function ChatPageInner() {
                       thread={t}
                       stage={stage}
                       workerProvider={worker?.provider ?? null}
+                      predict={
+                        stage === 'predicting' && worker
+                          ? {
+                              ageSec: worker.age_seconds ?? 0,
+                              fetchedAt: workersFeed.lastFetchedAt ?? Date.now(),
+                              etaSec:
+                                (worker.provider ? predictEta.byProvider.get(worker.provider) : null) ??
+                                predictEta.overall,
+                            }
+                          : null
+                      }
                       flash={flashIds.has(t.id)}
-                      canApprove={paired && t.isPaid === false && readingIdOf(t.id) != null}
+                      // Cancelled bills are terminal COMPLETED rows — mark-paid
+                      // would set is_paid but skip the fortune-flow trigger
+                      // (idempotency guard), stranding the customer. Chat first.
+                      canApprove={
+                        paired &&
+                        t.isPaid === false &&
+                        readingIdOf(t.id) != null &&
+                        stage !== 'cancelled_user' &&
+                        stage !== 'cancelled_system'
+                      }
                       onOpen={() => {
                         setActiveId(t.id);
                         setViewMode('single');
@@ -1378,6 +1439,7 @@ function MultiTile({
   thread: t,
   stage,
   workerProvider,
+  predict,
   flash,
   canApprove,
   onOpen,
@@ -1386,13 +1448,35 @@ function MultiTile({
   thread: ChatThread;
   stage: ChatStage;
   workerProvider: string | null;
+  /** Live prediction timing — age at fetch + when fetched + median ETA. */
+  predict: { ageSec: number; fetchedAt: number; etaSec: number | null } | null;
   flash: boolean;
   canApprove: boolean;
   onOpen: () => void;
   onApprove: () => void;
 }) {
   const meta = STAGE_META[stage];
-  const hot = stage !== 'idle';
+  const hot = stage !== 'idle' && stage !== 'cancelled_system';
+
+  // ⏱️ Realtime countdown while the AI is generating — ticks every second
+  // between the 3s worker polls so the operator sees a live clock, not a
+  // stale snapshot. ETA = median latency of recent calls (same provider).
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (stage !== 'predicting' || !predict) return;
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [stage, predict]);
+  let timeText = '';
+  if (stage === 'predicting' && predict) {
+    const elapsed = predict.ageSec + Math.max(0, (nowMs - predict.fetchedAt) / 1000);
+    if (predict.etaSec != null) {
+      const remain = predict.etaSec - elapsed;
+      timeText = remain > 0 ? `เหลือ ~${Math.ceil(remain)}s` : `นานกว่าปกติ +${Math.ceil(-remain)}s`;
+    } else {
+      timeText = `${Math.floor(elapsed)}s แล้ว`;
+    }
+  }
   return (
     <div
       role="button"
@@ -1436,6 +1520,7 @@ function MultiTile({
           {meta.icon} {meta.label}
           {stage === 'predicting' && workerProvider ? ` · ${workerProvider}` : ''}
         </span>
+        {timeText && <span className="mono opacity-90">· {timeText}</span>}
       </div>
 
       <div className="text-2xs text-dim line-clamp-2 break-words flex-1">{t.last}</div>

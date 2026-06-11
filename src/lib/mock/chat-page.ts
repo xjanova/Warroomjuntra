@@ -16,11 +16,13 @@ export type ChatMessage = {
 //   reading row (adapters/chat.ts) except 'predicting', which the chat page
 //   overlays live from the workers queue (an in-flight AI call right now).
 export type ChatStage =
-  | 'predicting' // 🔮 AI กำลังทำนายอยู่ตอนนี้ (live worker call)
-  | 'celtic'     // 🃏 อยู่ใน Celtic flow — เลือกไพ่/ตอบคำถาม (จ่ายแล้ว ยังไม่มีคำทำนาย)
-  | 'deciding'   // 💰 มีบิลค้าง — กำลังตัดสินใจชำระ
-  | 'waiting'    // ⏳ จ่ายแล้ว รอคำทำนายส่ง
-  | 'idle';      // คุยทั่วไป / จบแล้ว
+  | 'predicting'       // 🔮 AI กำลังทำนายอยู่ตอนนี้ (live worker call / celtic_generating)
+  | 'cancelled_user'   // 🚨 ลูกค้ายกเลิกบิลเอง — รายได้หลุดมือ ต้องตามด่วน (CRITICAL)
+  | 'celtic'           // 🃏 อยู่ใน Celtic flow — เลือกไพ่/ตอบคำถาม (จ่ายแล้ว ยังไม่มีคำทำนาย)
+  | 'deciding'         // 💰 มีบิลค้าง — กำลังตัดสินใจชำระ
+  | 'waiting'          // ⏳ จ่ายแล้ว รอคำทำนายส่ง
+  | 'cancelled_system' // ❌ ระบบยกเลิกบิลให้ (หมดเวลา 30/90 นาที — cron)
+  | 'idle';            // คุยทั่วไป / จบแล้ว
 
 export type ChatThread = {
   id: string;

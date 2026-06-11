@@ -82,6 +82,16 @@ export type FortuneReading = {
   paid_at: Iso8601 | null;
   response_type: 'pending' | 'ai' | 'admin' | string | null;
   responded_at: Iso8601 | null;
+  // 🔲 (2026-06-12) Fine funnel stage (celtic_picking / celtic_generating /
+  //    pending_payment …) + cancellation verdict from the backend resource.
+  //    reason 'user_cancelled' = the CUSTOMER killed the bill (critical);
+  //    auto_expired[_grace] = cron. Optional — absent on older backends.
+  conversation_status?: string | null;
+  cancellation?: {
+    reason: 'auto_expired' | 'auto_expired_grace' | 'user_cancelled' | 'unknown' | string;
+    label: string | null;
+    cancelled_at?: Iso8601 | null;
+  } | null;
   ai: {
     provider: string | null;
     model: string | null;

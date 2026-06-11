@@ -6,11 +6,29 @@ import type { FortuneReading } from '@/lib/api';
 /** Display metadata per stage. `prio` orders the multi-view grid — hot stages
  *  (live prediction, card-picking, payment decision) float to the top. */
 export const STAGE_META: Record<ChatStage, { label: string; icon: string; prio: number; color: string }> = {
-  predicting: { label: 'AI กำลังทำนาย', icon: '🔮', prio: 0, color: '#8b5cf6' },
-  celtic:     { label: 'กำลังเลือกไพ่ · Celtic', icon: '🃏', prio: 1, color: '#22d3ee' },
-  deciding:   { label: 'รอตัดสินใจชำระ', icon: '💰', prio: 2, color: '#f59e0b' },
-  waiting:    { label: 'จ่ายแล้ว · รอคำทำนาย', icon: '⏳', prio: 3, color: '#f43f5e' },
-  idle:       { label: 'คุยทั่วไป', icon: '💬', prio: 9, color: '#6b7280' },
+  predicting:       { label: 'AI กำลังทำนาย', icon: '🔮', prio: 0, color: '#8b5cf6' },
+  cancelled_user:   { label: 'ลูกค้ายกเลิกบิลเอง', icon: '🚨', prio: 1, color: '#ef4444' },
+  celtic:           { label: 'กำลังเลือกไพ่ · Celtic', icon: '🃏', prio: 2, color: '#22d3ee' },
+  deciding:         { label: 'รอตัดสินใจชำระ', icon: '💰', prio: 3, color: '#f59e0b' },
+  waiting:          { label: 'จ่ายแล้ว · รอคำทำนาย', icon: '⏳', prio: 4, color: '#f43f5e' },
+  cancelled_system: { label: 'ยกเลิกโดยระบบ', icon: '❌', prio: 8, color: '#9ca3af' },
+  idle:             { label: 'คุยทั่วไป', icon: '💬', prio: 9, color: '#6b7280' },
+};
+
+// conversation_status → stage. The backend's fine statuses beat inference;
+// listed explicitly so a new backend status falls through to inference rather
+// than silently mis-bucketing.
+const CS_STAGE: Record<string, ChatStage> = {
+  celtic_generating: 'predicting',
+  celtic_picking: 'celtic',
+  collecting_tarot: 'celtic',
+  celtic_awaiting_question: 'celtic',
+  celtic_qa_prompt: 'celtic',
+  pending_payment: 'deciding',
+  celtic_pending_payment: 'deciding',
+  awaiting_payment_method: 'deciding',
+  pending_stripe_payment: 'deciding',
+  tier_choice: 'deciding',
 };
 
 function looksCeltic(r: FortuneReading): boolean {
@@ -31,6 +49,15 @@ function looksCeltic(r: FortuneReading): boolean {
  * the workers queue (an actual in-flight AI call for this reading).
  */
 export function stageOfReading(r: FortuneReading): ChatStage {
+  // Cancellation wins over everything — the row is terminal. user_cancelled is
+  // the critical one (customer actively walked from the bill).
+  if (r.cancellation) {
+    return r.cancellation.reason === 'user_cancelled' ? 'cancelled_user' : 'cancelled_system';
+  }
+  // Exact stage from the backend's conversation_status when present.
+  const cs = (r.conversation_status ?? '').toLowerCase();
+  if (cs && CS_STAGE[cs]) return CS_STAGE[cs];
+  // Fallback inference (older backend without the new resource fields).
   if (!r.is_paid && r.amount_paid > 0) return 'deciding';
   if (r.is_paid && !r.ai_response) return looksCeltic(r) ? 'celtic' : 'waiting';
   return 'idle';
@@ -97,12 +124,15 @@ export function readingToChatThread(r: FortuneReading): ChatThread {
     takenBy: bot ? undefined : { initial: 'AD', color: '#22d3ee' },
     takenByName: bot ? undefined : 'admin',
     takenAt: r.responded_at ? formatTime(r.responded_at) : undefined,
-    pinReason:
-      r.reading_type === 'deep'
-        ? '🔮 Celtic Cross'
-        : !r.is_paid && r.amount_paid > 0
-        ? `💰 บิล ฿${r.amount_paid.toLocaleString()}`
-        : undefined,
+    pinReason: r.cancellation
+      ? r.cancellation.reason === 'user_cancelled'
+        ? '🚨 ลูกค้ายกเลิกบิลเอง'
+        : '❌ ' + (r.cancellation.label ?? 'ยกเลิกโดยระบบ')
+      : r.reading_type === 'deep'
+      ? '🔮 Celtic Cross'
+      : !r.is_paid && r.amount_paid > 0
+      ? `💰 บิล ฿${r.amount_paid.toLocaleString()}`
+      : undefined,
     messages,
   };
 }
