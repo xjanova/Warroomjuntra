@@ -8,11 +8,17 @@ import { useWarroom } from '@/lib/stores/warroom';
 import {
   useAdminData,
   fetchPendingWithdrawals,
+  fetchWithdrawals,
   approveWithdrawal,
   rejectWithdrawal,
+  batchApproveWithdrawals,
+  completeWithdrawal,
   describeError,
 } from '@/lib/api';
 import { withdrawalToApprovalItem } from '@/lib/adapters/approvals-page';
+import { CreditModal } from '@/components/warroom/CreditModal';
+import { useSettings, isPaired as isPairedFn } from '@/lib/stores/settings';
+import { cn } from '@/lib/utils';
 
 export default function ApprovalsPage() {
   const live = useAdminData<ApprovalItem[]>({
@@ -38,6 +44,30 @@ export default function ApprovalsPage() {
   }, [items, active]);
   const [picked, setPicked] = useState<Record<string, boolean>>({});
   const pushToast = useWarroom((s) => s.pushToast);
+  const paired = useSettings((s) => isPairedFn(s));
+
+  // 💸 (2026-06-11) Money actions now require an explicit confirm step — the
+  //   old ✓ fired approveWithdrawal instantly and ✕ used a bare window.prompt.
+  const [confirm, setConfirm] = useState<{
+    action: 'approve' | 'reject' | 'complete';
+    items: ApprovalItem[];
+  } | null>(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
+
+  // 💳 In-app credit adjust for the selected item's customer.
+  const [creditTarget, setCreditTarget] = useState<{ id: number; name: string } | null>(null);
+
+  // 🏦 (2026-06-11) Approved-but-not-transferred queue → "✓ โอนแล้ว" closes the
+  //   loop with completeWithdrawal (status approved → completed).
+  const approvedFeed = useAdminData<ApprovalItem[]>({
+    key: 'approvals-approved-withdrawals',
+    fetcher: async () => {
+      const res = await fetchWithdrawals({ status: 'approved', per_page: 50 });
+      const list = Array.isArray(res) ? res : res.data;
+      return list.map(withdrawalToApprovalItem);
+    },
+    mock: [],
+  });
 
   const tabs = useMemo(() => {
     const count = (kind: string) =>
@@ -91,38 +121,65 @@ export default function ApprovalsPage() {
     ];
   }, [items]);
 
-  async function performAction(it: ApprovalItem, action: 'approve' | 'reject') {
-    if (live.source !== 'live' || !it.id.startsWith('wd-')) {
-      // mock or non-withdrawal item — UI-only
-      setItems((arr) => arr.filter((i) => i.id !== it.id));
-      setActive((a) => (a?.id === it.id ? null : a));
+  // Open the confirm modal (live items) or apply locally (mock / non-wd rows).
+  // Real money NEVER moves without the operator reading a summary + pressing
+  // ยืนยัน — the old ✓ fired the API instantly with no second look.
+  function requestAction(targets: ApprovalItem[], action: 'approve' | 'reject' | 'complete') {
+    if (targets.length === 0) return;
+    const liveItems = targets.filter((i) => live.source === 'live' && i.id.startsWith('wd-'));
+    if (liveItems.length === 0) {
+      // mock-only — keep the old UI-only behavior
+      const ids = new Set(targets.map((i) => i.id));
+      setItems((arr) => arr.filter((i) => !ids.has(i.id)));
+      setActive((a) => (a && ids.has(a.id) ? null : a));
       pushToast({
-        kind: action === 'approve' ? 'ok' : 'crit',
-        title: action === 'approve' ? 'อนุมัติแล้ว (mock)' : 'ปฏิเสธแล้ว (mock)',
-        body: it.title,
+        kind: action === 'reject' ? 'crit' : 'ok',
+        title: (action === 'approve' ? 'อนุมัติแล้ว' : action === 'reject' ? 'ปฏิเสธแล้ว' : 'ปิดงานแล้ว') + ' (mock)',
+        body: targets[0].title,
       });
       return;
     }
-    const numericId = it.id.replace(/^wd-/, '');
+    setConfirm({ action, items: liveItems });
+  }
+
+  // Operator pressed ยืนยัน in the modal → hit the API for real.
+  async function executeConfirmed(reason: string) {
+    if (!confirm || confirmBusy) return;
+    const { action, items: targets } = confirm;
+    const ids = targets.map((i) => i.id.replace(/^wd-/, ''));
+    setConfirmBusy(true);
     try {
       if (action === 'approve') {
-        await approveWithdrawal(numericId);
-        pushToast({ kind: 'ok', title: 'อนุมัติถอนเงินแล้ว', body: it.title });
+        // One batch call when approving several — the backend only touches
+        // status=pending rows, so double-fires are harmless.
+        if (ids.length > 1) await batchApproveWithdrawals(ids);
+        else await approveWithdrawal(ids[0]);
+        pushToast({ kind: 'ok', title: `อนุมัติถอนเงินแล้ว ${ids.length} รายการ`, body: targets[0].title });
+      } else if (action === 'reject') {
+        for (const id of ids) await rejectWithdrawal(id, reason);
+        pushToast({ kind: 'crit', title: `ปฏิเสธแล้ว ${ids.length} รายการ`, body: reason.slice(0, 60) });
       } else {
-        const reason = prompt('เหตุผลที่ปฏิเสธ?') ?? '';
-        if (!reason.trim()) return;
-        await rejectWithdrawal(numericId, reason);
-        pushToast({ kind: 'crit', title: 'ปฏิเสธคำขอแล้ว', body: it.title });
+        for (const id of ids) await completeWithdrawal(id, reason || undefined);
+        pushToast({ kind: 'ok', title: `บันทึกโอนแล้ว ${ids.length} รายการ`, body: targets[0].title });
       }
-      setItems((arr) => arr.filter((i) => i.id !== it.id));
-      setActive((a) => (a?.id === it.id ? null : a));
+      const removed = new Set(targets.map((i) => i.id));
+      setItems((arr) => arr.filter((i) => !removed.has(i.id)));
+      setActive((a) => (a && removed.has(a.id) ? null : a));
+      setPicked({});
+      setConfirm(null);
       void live.refetch();
+      void approvedFeed.refetch();
     } catch (e) {
       pushToast({
         kind: 'crit',
-        title: action === 'approve' ? 'อนุมัติไม่สำเร็จ' : 'ปฏิเสธไม่สำเร็จ',
+        title: action === 'approve' ? 'อนุมัติไม่สำเร็จ' : action === 'reject' ? 'ปฏิเสธไม่สำเร็จ' : 'บันทึกโอนไม่สำเร็จ',
         body: describeError(e),
       });
+      // Keep the modal open — partial bulk failures need a refetch to resync.
+      void live.refetch();
+      void approvedFeed.refetch();
+    } finally {
+      setConfirmBusy(false);
     }
   }
 
@@ -137,14 +194,9 @@ export default function ApprovalsPage() {
     [picked],
   );
 
-  async function bulkAction(action: 'approve' | 'reject') {
-    const ids = filtered.filter((i) => picked[i.id]).map((i) => i.id);
-    if (!ids.length) return;
-    for (const id of ids) {
-      const it = items.find((i) => i.id === id);
-      if (it) await performAction(it, action);
-    }
-    setPicked({});
+  function bulkAction(action: 'approve' | 'reject') {
+    const targets = filtered.filter((i) => picked[i.id]);
+    requestAction(targets, action);
   }
 
   return (
@@ -169,6 +221,44 @@ export default function ApprovalsPage() {
           ))}
         </div>
       </section>
+
+      {/* 🏦 (2026-06-11) Approved → waiting for the actual bank transfer. The
+          flow used to dead-end at "approve"; โอนแล้ว calls completeWithdrawal. */}
+      {approvedFeed.source === 'live' && approvedFeed.data.length > 0 && (
+        <section className="px-3 py-2 border-b border-line bg-ok/5 shrink-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="t-h text-ok shrink-0">🏦 อนุมัติแล้ว · รอโอนจริง {approvedFeed.data.length} รายการ</span>
+            <div className="flex-1" />
+            <button
+              className="btn btn-ok text-2xs"
+              onClick={() => requestAction(approvedFeed.data, 'complete')}
+            >
+              ✓ โอนครบทั้งหมดแล้ว
+            </button>
+          </div>
+          <div className="flex gap-1.5 mt-1.5 overflow-x-auto pb-0.5">
+            {approvedFeed.data.map((w) => (
+              <div
+                key={w.id}
+                className="shrink-0 border border-ok/30 bg-panel rounded px-2 py-1.5 text-2xs flex items-center gap-2"
+              >
+                <div>
+                  <div className="text-fg">{w.party}</div>
+                  <div className="mono text-warn">฿{Math.abs(w.amount).toLocaleString()}</div>
+                  <div className="text-mute mono">{w.note}</div>
+                </div>
+                <button
+                  className="btn btn-ok text-2xs py-0.5"
+                  title="บันทึกว่าโอนเงินให้ลูกค้าแล้ว"
+                  onClick={() => requestAction([w], 'complete')}
+                >
+                  ✓ โอนแล้ว
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       <div className="px-3 border-b border-line flex items-center gap-1 shrink-0">
         {tabs.map((t) => (
@@ -259,10 +349,10 @@ export default function ApprovalsPage() {
                   <td className="mono text-2xs text-mute">{it.when}</td>
                   <td className="text-xs text-mystic">{it.by}</td>
                   <td onClick={(e) => e.stopPropagation()} className="text-right space-x-1">
-                    <button className="btn btn-ok" onClick={() => performAction(it, 'approve')}>
+                    <button className="btn btn-ok" onClick={() => requestAction([it], 'approve')}>
                       ✓
                     </button>
-                    <button className="btn btn-crit" onClick={() => performAction(it, 'reject')}>
+                    <button className="btn btn-crit" onClick={() => requestAction([it], 'reject')}>
                       ✕
                     </button>
                   </td>
@@ -313,24 +403,33 @@ export default function ApprovalsPage() {
               <div className="grid grid-cols-2 gap-2">
                 <button
                   className="btn btn-ok justify-center py-2"
-                  onClick={() => performAction(active, 'approve')}
+                  onClick={() => requestAction([active], 'approve')}
                 >
                   ✓ อนุมัติ
                 </button>
                 <button
                   className="btn btn-crit justify-center py-2"
-                  onClick={() => performAction(active, 'reject')}
+                  onClick={() => requestAction([active], 'reject')}
                 >
                   ✕ ปฏิเสธ
                 </button>
                 <button
-                  className="btn justify-center py-2 col-span-2"
+                  className="btn justify-center py-2"
+                  disabled={!paired || active.userId == null}
+                  title={active.userId == null ? 'ไม่ทราบ user id ของรายการนี้' : 'เติม/หักเครดิตลูกค้าคนนี้'}
                   onClick={() => {
-                    // Open the customer's wallet detail page in admin web — operator
-                    // can request additional info / message the customer from there.
-                    const target = (active as { user_id?: number; id?: string }).user_id
-                      ?? String(active.id ?? '').replace(/^w-/, '');
-                    window.open('https://main.thaiprompt.online/admin/wallets?user=' + target, '_blank', 'noopener');
+                    if (active.userId != null) setCreditTarget({ id: active.userId, name: active.party });
+                  }}
+                >
+                  💳 + เครดิต
+                </button>
+                <button
+                  className="btn justify-center py-2"
+                  onClick={() => {
+                    // Wallet detail in admin web. Old code stripped `w-` off a
+                    // `wd-…` id → linked to user "d-5"; use the real userId now.
+                    const target = active.userId ?? '';
+                    window.open('https://main.thaiprompt.online/admin/wallets' + (target ? '?user=' + target : ''), '_blank', 'noopener');
                   }}
                 >
                   ↪ ขอข้อมูลเพิ่ม
@@ -340,6 +439,113 @@ export default function ApprovalsPage() {
           </aside>
         )}
       </main>
+
+      {/* 💸 (2026-06-11) Confirm-before-money modal (single + bulk). */}
+      {confirm && (
+        <ConfirmActionModal
+          action={confirm.action}
+          items={confirm.items}
+          busy={confirmBusy}
+          onClose={() => !confirmBusy && setConfirm(null)}
+          onConfirm={(reason) => void executeConfirmed(reason)}
+        />
+      )}
+
+      {/* 💳 (2026-06-11) In-app credit adjust for the selected customer. */}
+      {creditTarget && (
+        <CreditModal
+          userId={creditTarget.id}
+          customerName={creditTarget.name}
+          onClose={() => setCreditTarget(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// 💸 (2026-06-11) Confirmation before any money-moving call. Shows who/how
+// much/total; reject requires a reason (it lands in the customer-facing record).
+function ConfirmActionModal({
+  action,
+  items,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  action: 'approve' | 'reject' | 'complete';
+  items: ApprovalItem[];
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: (reason: string) => void;
+}) {
+  const [reason, setReason] = useState('');
+  const total = items.reduce((acc, i) => acc + Math.abs(i.amount), 0);
+  const meta = {
+    approve: { icon: '✓', title: 'อนุมัติถอนเงิน', btn: 'btn-ok', accent: 'border-ok/40', note: 'เงินจะถูกอนุมัติให้ถอน — ตรวจบัญชีรับโอนก่อนยืนยัน' },
+    reject: { icon: '✕', title: 'ปฏิเสธคำขอถอน', btn: 'btn-crit', accent: 'border-crit/40', note: 'ลูกค้าจะเห็นเหตุผลที่ปฏิเสธ' },
+    complete: { icon: '🏦', title: 'บันทึกว่าโอนแล้ว', btn: 'btn-ok', accent: 'border-ok/40', note: 'ยืนยันว่าโอนเงินเข้าบัญชีลูกค้าเรียบร้อยแล้ว (ปิดงาน)' },
+  }[action];
+  const reasonRequired = action === 'reject';
+  const canConfirm = !busy && (!reasonRequired || reason.trim().length > 0);
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 backdrop-blur-sm" onClick={() => !busy && onClose()}>
+      <div
+        className={cn('panel w-[460px] max-w-[92vw] p-4 border', meta.accent)}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start gap-3 mb-3">
+          <div className="text-2xl">{meta.icon}</div>
+          <div className="flex-1">
+            <div className="text-base font-semibold text-fg">
+              {meta.title} · {items.length} รายการ · ฿{total.toLocaleString()}
+            </div>
+            <div className="text-2xs text-mute mt-0.5">{meta.note}</div>
+          </div>
+          <button onClick={onClose} className="btn btn-ghost text-mute" title="ปิด" disabled={busy}>
+            ✕
+          </button>
+        </div>
+
+        <div className="max-h-[200px] overflow-y-auto space-y-1 mb-3">
+          {items.map((i) => (
+            <div key={i.id} className="flex items-center gap-2 bg-panel border border-line rounded px-2 py-1.5 text-xs">
+              <span className="flex-1 text-fg truncate">{i.party}</span>
+              <span className="text-2xs text-mute mono truncate max-w-[160px]">{i.note}</span>
+              <span className="mono font-semibold text-warn shrink-0">฿{Math.abs(i.amount).toLocaleString()}</span>
+            </div>
+          ))}
+        </div>
+
+        {action !== 'approve' && (
+          <>
+            <div className="text-2xs text-mute mb-1.5">
+              {action === 'reject' ? 'เหตุผลที่ปฏิเสธ (บังคับ)' : 'โน้ต (ไม่บังคับ เช่น เลขอ้างอิงสลิป)'}
+            </div>
+            <input
+              type="text"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder={action === 'reject' ? 'เช่น บัญชีรับโอนไม่ตรงชื่อ / ยอดผิดเงื่อนไข' : 'เช่น โอนผ่าน KBANK 21:30'}
+              className="w-full px-2 py-1.5 text-xs mb-3"
+              maxLength={500}
+            />
+          </>
+        )}
+
+        <div className="flex items-center gap-2">
+          <button onClick={onClose} className="btn btn-ghost flex-1 justify-center" disabled={busy}>
+            ยกเลิก
+          </button>
+          <button
+            onClick={() => onConfirm(reason.trim())}
+            disabled={!canConfirm}
+            className={cn('btn flex-1 justify-center disabled:opacity-40', meta.btn)}
+          >
+            {busy ? 'กำลังทำ...' : `${meta.icon} ยืนยัน${items.length > 1 ? ` ${items.length} รายการ` : ''}`}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

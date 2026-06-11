@@ -15,6 +15,7 @@ export function withdrawalToApprovalItem(w: WithdrawalRequest): ApprovalItem {
 
   return {
     id: `wd-${w.id}`,
+    userId: w.user_id ?? w.user?.id ?? null,
     kind: 'REFUND',
     tone: w.amount >= 10000 ? 'crit' : 'warn',
     title: `ถอนเงิน — ${name}`,

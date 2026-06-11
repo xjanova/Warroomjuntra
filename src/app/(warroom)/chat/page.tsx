@@ -12,6 +12,7 @@ import { useWarroom } from '@/lib/stores/warroom';
 import { useFortuneFeed, sendChatMessage, suggestChatReply, fetchReadingTranscript, fetchFortuneWorkersQueue, fetchBanStatus, banUser, unbanUser, markReadingPaid, fetchUserReadings, takeoverChat, resumeChatBot, fetchChatTakeoverStatus, useAdminData, describeError, type ReadingTranscriptMessage, type FortuneWorkersQueue, type WorkerCallRow, type BanStatusResponse } from '@/lib/api';
 import { useSettings, isPaired as isPairedFn } from '@/lib/stores/settings';
 import { readingToChatThread, STAGE_META } from '@/lib/adapters/chat';
+import { CreditModal } from '@/components/warroom/CreditModal';
 import { cn } from '@/lib/utils';
 
 // Static-export builds require useSearchParams() to be inside a Suspense
@@ -382,6 +383,8 @@ function ChatPageInner() {
   //   the thread is a real reading and not yet paid.
   const [approveOpen, setApproveOpen] = useState(false);
   const [approving, setApproving] = useState(false);
+  // 💳 (2026-06-11) In-app credit adjust for the active thread's customer.
+  const [creditOpen, setCreditOpen] = useState(false);
 
   const performApprove = async (amount: 39 | 99) => {
     if (!active || approving) return;
@@ -988,10 +991,17 @@ function ChatPageInner() {
               <button
                 className="btn btn-ok flex-1 justify-center"
                 onClick={() => {
-                  // Credit adjustment lives in the admin wallet page; open with user filter.
-                  // active.userId may be null for FB-only threads — fall back to psid filter.
-                  const target = (active as { userId?: number; psid?: string }).userId ?? active.psid;
-                  window.open('https://main.thaiprompt.online/admin/wallets?user=' + target, '_blank', 'noopener');
+                  // 💳 In-app adjust (CreditModal). FB-only threads have no web
+                  // account → no wallet to adjust — say so instead of detouring.
+                  if (!paired) {
+                    pushToast({ kind: 'warn', title: 'ยังไม่เชื่อมต่อ', body: 'เชื่อมต่อใน Settings ก่อนปรับเครดิต' });
+                    return;
+                  }
+                  if (!active.userId) {
+                    pushToast({ kind: 'info', title: 'ลูกค้า FB ไม่มีบัญชีเว็บ', body: 'ไม่มีกระเป๋าเงินให้ปรับ — ใช้ได้เฉพาะลูกค้าที่สมัครเว็บ' });
+                    return;
+                  }
+                  setCreditOpen(true);
                 }}
               >
                 + เครดิต
@@ -1054,6 +1064,15 @@ function ChatPageInner() {
           loading={approving}
           onClose={() => setApproveOpen(false)}
           onConfirm={(amount) => performApprove(amount)}
+        />
+      )}
+
+      {/* 💳 (2026-06-11) In-app credit adjust — replaces the admin-web detour. */}
+      {active && creditOpen && active.userId != null && (
+        <CreditModal
+          userId={active.userId}
+          customerName={active.name}
+          onClose={() => setCreditOpen(false)}
         />
       )}
     </div>

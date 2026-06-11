@@ -123,6 +123,7 @@ export type {
   AiBotsResponse,
   WithdrawalRequest,
   WithdrawalsListResponse,
+  AdminWallet,
   AnalyticsOverview,
   AdminUserListItem,
   AdminUsersResponse,

@@ -10,6 +10,8 @@ import type {
   AiDashboardResponse,
   AiBotsResponse,
   WithdrawalsListResponse,
+  AdminWallet,
+  Paginator,
   AnalyticsOverview,
   AdminUsersResponse,
   AdminUserListItem,
@@ -203,9 +205,18 @@ export async function cancelReading(id: string | number, reason?: string) {
 // despite the controller namespace being Finance\WalletController. Match the
 // actual route prefix in routes/admin_api.php, not the controller name.
 
-export async function fetchWallets(params?: { page?: number; per_page?: number; q?: string }) {
+// Backend filters: search / status / min_balance / max_balance / user_id
+// (WalletService::getAllWallets). `user_id` is the user→wallet resolver the
+// CreditModal uses. NOTE: the old `q` param matched nothing server-side.
+export async function fetchWallets(params?: {
+  page?: number;
+  per_page?: number;
+  search?: string;
+  status?: string;
+  user_id?: number | string;
+}) {
   const qs = toQuery(params);
-  return apiRequest<unknown>({ path: `/finance/wallets${qs}` });
+  return apiRequest<Paginator<AdminWallet>>({ path: `/finance/wallets${qs}` });
 }
 
 export async function fetchWalletsSystemStats() {

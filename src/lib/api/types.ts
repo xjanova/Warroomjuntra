@@ -229,6 +229,30 @@ export type WithdrawalRequest = {
 export type WithdrawalsListResponse = WithdrawalRequest[] | Paginator<WithdrawalRequest>;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Wallets — GET /finance/wallets (paginated)
+// Controller: Api/Admin/Finance/WalletController · Resource: Admin/WalletResource
+// index() accepts ?user_id= filter (WalletService::getAllWallets) — that's how
+// the warroom resolves "user → wallet" for the in-app + เครดิต modal.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type AdminWallet = {
+  id: number;
+  wallet_address: string | null;
+  currency: string | null;
+  balance: number;
+  total_income: number;
+  total_expense: number;
+  status: string;
+  is_active: boolean;
+  is_locked: boolean;
+  locked_until: Iso8601 | null;
+  two_factor_enabled?: boolean;
+  user?: { id: number; name: string; email?: string | null } | null;
+  last_transaction_at?: Iso8601 | null;
+  created_at?: Iso8601 | null;
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Users — GET /users (paginated)
 // Resource: Admin/AdminUserListResource
 // ─────────────────────────────────────────────────────────────────────────────

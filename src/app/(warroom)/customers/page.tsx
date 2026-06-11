@@ -7,6 +7,8 @@ import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { useAdminData, fetchUsers, fetchUserStats, type AdminUserStats } from '@/lib/api';
 import { userToCustomerCard } from '@/lib/adapters/customers';
 import { useWarroom } from '@/lib/stores/warroom';
+import { CreditModal } from '@/components/warroom/CreditModal';
+import { useSettings, isPaired as isPairedFn } from '@/lib/stores/settings';
 
 type SortKey = 'ltv' | 'credits' | 'level';
 
@@ -26,6 +28,10 @@ export default function CustomersPage() {
   const [sort, setSort] = useState<SortKey>('ltv');
   const [vipOnly, setVipOnly] = useState(false);
   const [problemOnly, setProblemOnly] = useState(false);
+  // 💳 (2026-06-11) In-app credit adjust — was an admin-web detour.
+  const [creditTarget, setCreditTarget] = useState<{ id: number; name: string } | null>(null);
+  const paired = useSettings((s) => isPairedFn(s));
+  const pushToast = useWarroom((s) => s.pushToast);
 
   const live = useAdminData<CustomerCard[]>({
     key: 'customers-page',
@@ -248,8 +254,13 @@ export default function CustomersPage() {
                   className="btn justify-center text-2xs py-1"
                   onClick={(e) => {
                     e.stopPropagation();
-                    // Credit adjustment lives in the admin web wallet page; open in new tab.
-                    window.open('https://main.thaiprompt.online/admin/wallets?user=' + c.id, '_blank', 'noopener');
+                    // 💳 In-app adjust via /finance/wallets/{id}/adjust (no more
+                    // admin-web detour). Needs pairing — the modal calls the API.
+                    if (!paired) {
+                      pushToast({ kind: 'warn', title: 'ยังไม่เชื่อมต่อ', body: 'เชื่อมต่อใน Settings ก่อนปรับเครดิต' });
+                      return;
+                    }
+                    setCreditTarget({ id: c.id, name: c.name });
                   }}
                 >
                   + เครดิต
@@ -259,6 +270,15 @@ export default function CustomersPage() {
           </div>
         ))}
       </main>
+
+      {creditTarget && (
+        <CreditModal
+          userId={creditTarget.id}
+          customerName={creditTarget.name}
+          onClose={() => setCreditTarget(null)}
+          onDone={() => void live.refetch()}
+        />
+      )}
     </div>
   );
 }

@@ -15,6 +15,9 @@ export type ApprovalItem = {
   by: string;
   detail: string;
   evidence?: { label: string; value: string }[];
+  // 💳 (2026-06-11) Owner's user id — drives the in-app CreditModal + the
+  //   admin-web wallet link (the old code mangled `wd-5` → user "d-5").
+  userId?: number | null;
 };
 
 export const APPROVAL_TABS = [
