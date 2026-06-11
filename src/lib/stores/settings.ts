@@ -182,9 +182,12 @@ const DEFAULT_EVE: EveConfig = {
       autoSendOnFinal: true,
     },
     speak: {
-      // Default OFF — operator opts in via Settings. But the cute preset is
-      // applied on first enable: pitch 1.3 + rate 1.05 → young-girl feel.
-      enabled: false,
+      // 🔊 Default ON (2026-06-12) — "ไม่ได้ยินเสียงบน prod" turned out to be
+      // this flag sitting at its old default=false on the prod origin
+      // (localStorage is per-origin; it was only ever enabled on localhost
+      // during testing). The operator wants Eve speaking out of the box —
+      // mute her via Settings → Eve AI if needed.
+      enabled: true,
       voiceName: null,    // auto-pick best Thai female voice
       rate: 1.05,
       pitch: 1.30,
@@ -309,7 +312,7 @@ export const useSettings = create<SettingsState>()(
     {
       name: 'warroom-settings.v1',
       storage: createJSONStorage(() => localStorage),
-      version: 5,
+      version: 6,
       // v1 predates eve.voice/eve.safety; v3 adds eve.safety.autoManage. Normalize
       // the eve config against current defaults so older payloads never leave a
       // nested field undefined (EveChatBody/actions read safety.autoManage etc.).
@@ -351,6 +354,16 @@ export const useSettings = create<SettingsState>()(
               voice: { ...p.eve.voice, listen: { ...p.eve.voice.listen, enabled: true } },
             };
           }
+        }
+        // v6: Eve speaks by default. Stored speak.enabled=false on the prod
+        // origin (the old default nobody ever flipped there) was why "ไม่ได้ยิน
+        // เสียงบน prod แต่ local ได้ยิน". One-time flip; mute via Settings sticks
+        // afterwards because the version stops re-migrating.
+        if (fromVersion < 6 && p.eve?.voice && !p.eve.voice.speak.enabled) {
+          p.eve = {
+            ...p.eve,
+            voice: { ...p.eve.voice, speak: { ...p.eve.voice.speak, enabled: true } },
+          };
         }
         return p as SettingsState;
       },

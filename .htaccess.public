@@ -40,8 +40,15 @@
 <IfModule mod_headers.c>
     Header set X-Content-Type-Options "nosniff"
     Header set X-Frame-Options "SAMEORIGIN"
-    Header set Referrer-Policy "strict-origin-when-cross-origin"
-    Header set Permissions-Policy "camera=(), microphone=(), geolocation=()"
+    # no-referrer (2026-06-12): Eve's free Google-TTS voice streams from
+    # translate.google.com, which 404s any request carrying a foreign Referer.
+    # The app also sets <meta name=referrer> but the header must agree so the
+    # policy can't regress. Admin tool — outbound referrers carry no value.
+    Header set Referrer-Policy "no-referrer"
+    # microphone=(self) (2026-06-12): Eve takes voice commands via the browser's
+    # SpeechRecognition — microphone=() silently killed the mic on prod while
+    # localhost (no header) worked. Camera/geolocation stay blocked.
+    Header set Permissions-Policy "camera=(), microphone=(self), geolocation=()"
 </IfModule>
 
 # ============================================================
