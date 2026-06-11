@@ -21,8 +21,10 @@ const PAGE_ROUTES: Array<{ keywords: RegExp; path: string; label: string }> = [
   { keywords: /(หน้าแรก|warroom|war\s*room|home|dashboard|มิชชั่นคอนโทรล|mission\s*control)/i, path: '/',           label: 'หน้าแรก' },
   { keywords: /(แชต|chat|takeover|takeo|ตอบลูกค้า)/i,                                              path: '/chat',       label: 'แชต' },
   { keywords: /(บิล|invoice|bills|รายการบิล|จัดการบิล)/i,                                            path: '/bills',      label: 'บิล' },
-  { keywords: /(payment|กระทบยอด|sms|recon|เงิน(เข้า)?|ยอดโอน)/i,                                  path: '/payment',    label: 'กระทบยอดการเงิน' },
+  // ⚠ approvals MUST come before payment — "ถอนเงิน" used to be hijacked by the
+  //   payment row's bare เงิน and navigated to the wrong page.
   { keywords: /(approval|อนุมัติ|รออนุมัติ|withdrawal|ถอน|commission|คอมมิช)/i,                       path: '/approvals',  label: 'รออนุมัติ' },
+  { keywords: /(payment|กระทบยอด|sms|recon|เงินเข้า|ยอดโอน|สลิป)/i,                                  path: '/payment',    label: 'กระทบยอดการเงิน' },
   { keywords: /(moderation|เฝ้าระวัง|sensitive|อ่อนไหว|ban(ned)?|แบน|ห้าม)/i,                          path: '/moderation', label: 'เฝ้าระวัง' },
   { keywords: /(bot(s)?|บอท|automation|อัตโนมัติ)/i,                                                  path: '/bots',       label: 'บอท' },
   { keywords: /(customer(s)?|ลูกค้า|customer\s*360|360|persona)/i,                                  path: '/customers',  label: 'ลูกค้า' },

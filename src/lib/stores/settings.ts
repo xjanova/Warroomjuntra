@@ -163,18 +163,20 @@ const DEFAULT_SHIFT: ShiftConfig = {
 };
 
 const DEFAULT_EVE: EveConfig = {
-  // 🔊 (2026-06-12) gemini, not groq — prod's AI pool has NO groq key (and the
-  // backend's keyless Chat-AI fallback ALSO resolves to groq → Eve dead-ends
-  // with "ไม่พบ API Key"). The pool holds 9 active free-tier Gemini keys.
-  provider: 'gemini',
-  model: 'gemini-3.1-flash-lite',
+  // 🧠 (2026-06-12) openai gpt-5.4-mini as the primary brain (operator's call —
+  // smartest active key in the pool; gemini keys remain the LLM-side fallback
+  // via EveController's keyless-provider retry). NEVER groq — no key in pool.
+  provider: 'openai',
+  model: 'gpt-5.4-mini',
   temperature: 0.55,
-  maxTokens: 320,
+  maxTokens: 512,
   enabled: true,
   passContext: true,
   voice: {
     listen: {
-      enabled: false,
+      // 🎙️ Voice commands on by default — the mic only records when clicked,
+      // and STT is the browser's free engine (Chrome = Google's server STT).
+      enabled: true,
       lang: 'th-TH',
       continuous: false,
       autoSendOnFinal: true,
@@ -307,7 +309,7 @@ export const useSettings = create<SettingsState>()(
     {
       name: 'warroom-settings.v1',
       storage: createJSONStorage(() => localStorage),
-      version: 4,
+      version: 5,
       // v1 predates eve.voice/eve.safety; v3 adds eve.safety.autoManage. Normalize
       // the eve config against current defaults so older payloads never leave a
       // nested field undefined (EveChatBody/actions read safety.autoManage etc.).
@@ -329,6 +331,26 @@ export const useSettings = create<SettingsState>()(
         }
         if (fromVersion < 4 && p.eve?.provider === 'groq') {
           p.eve = { ...p.eve, provider: DEFAULT_EVE.provider, model: DEFAULT_EVE.model };
+        }
+        // v5: openai gpt-5.4-mini becomes the primary brain. Only flip configs
+        // still sitting on a PREVIOUS DEFAULT (groq / the short-lived gemini
+        // default) — a deliberately-picked provider stays untouched. Also turn
+        // the mic on (was default-off; recording still needs a click) and lift
+        // old default maxTokens for the smarter model.
+        if (fromVersion < 5 && p.eve) {
+          const onOldDefault =
+            p.eve.provider === 'groq' ||
+            (p.eve.provider === 'gemini' && p.eve.model === 'gemini-3.1-flash-lite');
+          if (onOldDefault) {
+            p.eve = { ...p.eve, provider: DEFAULT_EVE.provider, model: DEFAULT_EVE.model };
+          }
+          if (p.eve.maxTokens === 320) p.eve = { ...p.eve, maxTokens: 512 };
+          if (p.eve.voice && !p.eve.voice.listen.enabled) {
+            p.eve = {
+              ...p.eve,
+              voice: { ...p.eve.voice, listen: { ...p.eve.voice.listen, enabled: true } },
+            };
+          }
         }
         return p as SettingsState;
       },

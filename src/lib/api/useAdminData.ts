@@ -42,6 +42,10 @@ type CacheEntry<T> = {
   inflight: Promise<void> | null;
   subscribers: Set<() => void>;
   fetcher: (() => Promise<unknown>) | null;
+  // 🌐 (2026-06-12) Consecutive-failure counter. A single failed poll tick
+  // (Cloudflare blip, flaky network) used to flip the badge to "offline" for a
+  // whole interval — the operator saw the warroom "หลุด" every few minutes.
+  failStreak: number;
 };
 
 const cache = new Map<string, CacheEntry<unknown>>();
@@ -58,6 +62,7 @@ function getEntry<T>(key: string): CacheEntry<T> {
       inflight: null,
       subscribers: new Set(),
       fetcher: null,
+      failStreak: 0,
     };
     cache.set(key, e as unknown as CacheEntry<unknown>);
   }
@@ -86,10 +91,17 @@ async function fetchInto<T>(key: string, fetcher: () => Promise<T>): Promise<voi
       e.data = fresh;
       e.source = 'live';
       e.error = null;
+      e.failStreak = 0;
       e.lastFetchedAt = Date.now();
     } catch (err) {
+      e.failStreak += 1;
       e.error = describeError(err);
-      e.source = 'error';
+      // 🌐 Tolerate a single transient blip when we already have live data —
+      // the next poll tick (seconds away) decides. Two consecutive failures
+      // (or no data at all) → honest 'error'. Auth failures degrade
+      // immediately via the connection flip below.
+      const transient = e.data !== undefined && e.source === 'live' && e.failStreak < 2;
+      if (!transient) e.source = 'error';
       // keep last data — better than blanking the UI on a transient blip
 
       // If our token went bad mid-session (401/403), flip the connection to

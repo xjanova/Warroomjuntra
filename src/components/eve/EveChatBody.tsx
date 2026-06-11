@@ -9,6 +9,7 @@ import {
   fetchEveSignals,
   fetchPendingWithdrawals,
   fetchSmsInbox,
+  fetchFortuneReadings,
   describeError,
   type EveSignals,
   type WithdrawalRequest,
@@ -63,15 +64,22 @@ function escapeHtml(s: string): string {
 type EveRecords = {
   withdrawals?: Array<{ id: number; amount: number; name: string }>;
   sms?: Array<{ id: number; amount: number; bank: string; from: string }>;
+  // 🧠 (2026-06-12) Actionable reading rows so Eve proposes precise fixes:
+  //   stuck = paid but no reading delivered → [MARK_PAID ไม่ใช่] → [SEND_MSG]/แจ้งทีม
+  //   bills = bill issued, unpaid → ตามจ่าย [SEND_MSG:id:...] หรือ [MARK_PAID:id]
+  readings_stuck?: Array<{ id: number; amount: number; name: string; min: number }>;
+  bills_unpaid?: Array<{ id: number; amount: number; name: string; min: number }>;
 };
 
-// Fetch the top pending withdrawals + unmatched SMS in parallel. Best-effort:
-// either list failing just omits that slice — Eve still answers from the counts.
+// Fetch the top pending withdrawals + unmatched SMS + actionable readings in
+// parallel. Best-effort: any list failing just omits that slice — Eve still
+// answers from the counts.
 async function gatherRecords(): Promise<EveRecords> {
   const out: EveRecords = {};
-  const [wd, sms] = await Promise.allSettled([
+  const [wd, sms, readings] = await Promise.allSettled([
     fetchPendingWithdrawals(),
     fetchSmsInbox({ status: 'pending', per_page: 5 }),
+    fetchFortuneReadings({ per_page: 30 }),
   ]);
   if (wd.status === 'fulfilled') {
     const rows: WithdrawalRequest[] = Array.isArray(wd.value) ? wd.value : wd.value.data;
@@ -88,6 +96,21 @@ async function gatherRecords(): Promise<EveRecords> {
       bank: s.bank,
       from: s.sender_or_receiver ?? '',
     }));
+  }
+  if (readings.status === 'fulfilled') {
+    const rows = readings.value.data;
+    const ageMin = (iso?: string | null) =>
+      iso ? Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000)) : 0;
+    const compact = (r: (typeof rows)[number]) => ({
+      id: r.id,
+      amount: Math.round(r.amount_paid || 0),
+      name: r.user?.name || r.facebook_user_name || `#${r.id}`,
+      min: ageMin(r.created_at),
+    });
+    const stuck = rows.filter((r) => r.is_paid && !r.ai_response && !r.cancellation);
+    const bills = rows.filter((r) => !r.is_paid && r.amount_paid > 0 && !r.cancellation);
+    if (stuck.length) out.readings_stuck = stuck.slice(0, 5).map(compact);
+    if (bills.length) out.bills_unpaid = bills.slice(0, 5).map(compact);
   }
   return out;
 }
@@ -121,7 +144,13 @@ function buildStateContext(s: EveSignals, records?: EveRecords): Record<string, 
     },
     moderation: { suspects: s.moderation.suspects, banned_active: s.moderation.banned_active },
   };
-  if (records && (records.withdrawals?.length || records.sms?.length)) {
+  if (
+    records &&
+    (records.withdrawals?.length ||
+      records.sms?.length ||
+      records.readings_stuck?.length ||
+      records.bills_unpaid?.length)
+  ) {
     out.pending_records = records;
   }
   return out;
