@@ -258,22 +258,128 @@ export const VOICE_PRESETS = {
 
 export type VoicePresetKey = keyof typeof VOICE_PRESETS;
 
+// ── Google Translate TTS fallback ───────────────────────────────────────────
+// Most Windows Chrome installs ship ZERO Thai voices (only the 3 English
+// Microsoft SAPI ones), so SpeechSynthesis silently mangles or skips Thai.
+// Fallback: the free Google Translate voice — the same one Android users know.
+// Caveats: ~200-char limit per request (we chunk), unofficial endpoint, and it
+// 404s any request with a foreign Referer (app sets metadata.referrer
+// 'no-referrer' in layout.tsx to strip it). pitch is not supported; rate maps
+// to playbackRate.
+
+type GoogleSpeechHandle = { cancelled: boolean; current: HTMLAudioElement | null };
+let googleSpeechActive: GoogleSpeechHandle | null = null;
+
+function googleTtsUrl(chunk: string, lang: string): string {
+  const tl = (lang || 'th-TH').split('-')[0];
+  return (
+    'https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=' +
+    encodeURIComponent(tl) +
+    '&q=' +
+    encodeURIComponent(chunk)
+  );
+}
+
 /**
- * Speak `text` via SpeechSynthesis. Returns a handle to cancel.
+ * Split text into ≤maxLen chunks the TTS endpoint accepts. Thai rarely has
+ * spaces, so prefer sentence-ish boundaries (punctuation / ค่ะ / ครับ / นะคะ),
+ * then spaces, then hard-cut.
+ */
+export function chunkForTts(text: string, maxLen = 180): string[] {
+  const out: string[] = [];
+  let rest = text.trim();
+  const BOUNDARY = /[.!?…ๆฯ\n]|ค่ะ|ครับ|นะคะ|นะคับ/g;
+  while (rest.length > maxLen) {
+    const window = rest.slice(0, maxLen);
+    let cut = -1;
+    let m: RegExpExecArray | null;
+    BOUNDARY.lastIndex = 0;
+    while ((m = BOUNDARY.exec(window)) !== null) cut = m.index + m[0].length;
+    if (cut < maxLen * 0.3) {
+      const sp = window.lastIndexOf(' ');
+      cut = sp > maxLen * 0.3 ? sp + 1 : maxLen;
+    }
+    out.push(rest.slice(0, cut).trim());
+    rest = rest.slice(cut).trim();
+  }
+  if (rest) out.push(rest);
+  return out.filter(Boolean);
+}
+
+function speakViaGoogleTts(text: string, opts: SpeakOptions): { cancel: () => void } {
+  // Stop any previous Google playback (browser synthesis was cancelled by caller).
+  if (googleSpeechActive) {
+    googleSpeechActive.cancelled = true;
+    googleSpeechActive.current?.pause();
+  }
+  const handle: GoogleSpeechHandle = { cancelled: false, current: null };
+  googleSpeechActive = handle;
+
+  const chunks = chunkForTts(text);
+  const lang = opts.lang ?? 'th-TH';
+
+  void (async () => {
+    opts.onStart?.();
+    for (const chunk of chunks) {
+      if (handle.cancelled) return;
+      const ok = await new Promise<boolean>((resolve) => {
+        const audio = new Audio(googleTtsUrl(chunk, lang));
+        handle.current = audio;
+        audio.volume = clamp(opts.volume ?? 1.0, 0, 1);
+        // No pitch control here — approximate the persona with rate only.
+        audio.playbackRate = clamp(opts.rate ?? 1.0, 0.5, 2.0);
+        audio.onended = () => resolve(true);
+        audio.onerror = () => resolve(false);
+        audio.onpause = () => {
+          // pause() from cancel — treat as finished so the loop exits.
+          if (handle.cancelled) resolve(false);
+        };
+        audio.play().catch(() => resolve(false));
+      });
+      if (!ok) {
+        if (!handle.cancelled) opts.onError?.('google-tts-failed');
+        break;
+      }
+    }
+    if (!handle.cancelled) opts.onEnd?.();
+    if (googleSpeechActive === handle) googleSpeechActive = null;
+  })();
+
+  return {
+    cancel: () => {
+      handle.cancelled = true;
+      handle.current?.pause();
+      if (googleSpeechActive === handle) googleSpeechActive = null;
+    },
+  };
+}
+
+/**
+ * Speak `text` — browser SpeechSynthesis when a matching (Thai) voice exists,
+ * otherwise the free Google Translate voice. Returns a handle to cancel.
  *
  * If `interruptOnNew` is true (default), any in-flight utterance is cancelled
  * first — this is what you want for chat replies (don't queue up old context).
  */
 export function speak(text: string, opts: SpeakOptions = {}): { cancel: () => void } | null {
-  if (!isSpeechSynthesisSupported()) {
-    opts.onError?.('SpeechSynthesis not supported');
-    return null;
-  }
   const clean = text.replace(/<[^>]+>/g, '').trim();
   if (!clean) return null;
 
-  if (opts.interruptOnNew !== false) {
-    window.speechSynthesis.cancel();
+  if (opts.interruptOnNew !== false) cancelSpeech();
+
+  // Voice lookup. Use the cache if populated; otherwise fall back to inline
+  // getVoices() (sync — may return empty on first call).
+  const voices = isSpeechSynthesisSupported()
+    ? voicesCache ?? window.speechSynthesis.getVoices()
+    : [];
+  const matched = opts.voiceName
+    ? voices.find((v) => v.name === opts.voiceName) ?? pickBestThaiVoice(voices)
+    : pickBestThaiVoice(voices);
+
+  // No usable Thai voice on this machine (typical Windows Chrome: English-only
+  // SAPI voices) → Google fallback so Eve actually speaks Thai.
+  if (!matched || !isSpeechSynthesisSupported()) {
+    return speakViaGoogleTts(clean, opts);
   }
 
   const utter = new SpeechSynthesisUtterance(clean);
@@ -281,14 +387,7 @@ export function speak(text: string, opts: SpeakOptions = {}): { cancel: () => vo
   utter.rate = clamp(opts.rate ?? 1.0, 0.5, 2.0);
   utter.pitch = clamp(opts.pitch ?? 1.0, 0, 2);
   utter.volume = clamp(opts.volume ?? 1.0, 0, 1);
-
-  // Voice lookup. Use the cache if populated; otherwise fall back to inline
-  // getVoices() (sync — may return empty on first call).
-  const voices = voicesCache ?? (typeof window !== 'undefined' ? window.speechSynthesis.getVoices() : []);
-  const matched = opts.voiceName
-    ? voices.find((v) => v.name === opts.voiceName) ?? null
-    : pickBestThaiVoice(voices);
-  if (matched) utter.voice = matched;
+  utter.voice = matched;
 
   utter.onstart = () => opts.onStart?.();
   utter.onend = () => opts.onEnd?.();
@@ -314,6 +413,11 @@ export function cancelSpeech() {
     } catch {
       /* ignore */
     }
+  }
+  if (googleSpeechActive) {
+    googleSpeechActive.cancelled = true;
+    googleSpeechActive.current?.pause();
+    googleSpeechActive = null;
   }
 }
 

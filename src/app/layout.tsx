@@ -27,6 +27,11 @@ export const metadata: Metadata = {
   title: 'War Room · Juntra · ศูนย์ควบคุมภารกิจดูดวง',
   description: 'Fortune War Room — Mission Control for the Juntra fortune-telling system',
   icons: { icon: '/assets/juntra-logo.png' },
+  // Eve's Google-TTS fallback (lib/eve/voice.ts) streams from
+  // translate.google.com, which 404s any request carrying a foreign Referer.
+  // <audio> has no per-element referrerpolicy, so it must be document-wide.
+  // Safe for the admin API: CORS keys off Origin, which this doesn't touch.
+  referrer: 'no-referrer',
 };
 
 export const viewport: Viewport = {

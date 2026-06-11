@@ -163,8 +163,11 @@ const DEFAULT_SHIFT: ShiftConfig = {
 };
 
 const DEFAULT_EVE: EveConfig = {
-  provider: 'groq',
-  model: 'llama-3.3-70b-versatile',
+  // 🔊 (2026-06-12) gemini, not groq — prod's AI pool has NO groq key (and the
+  // backend's keyless Chat-AI fallback ALSO resolves to groq → Eve dead-ends
+  // with "ไม่พบ API Key"). The pool holds 9 active free-tier Gemini keys.
+  provider: 'gemini',
+  model: 'gemini-3.1-flash-lite',
   temperature: 0.55,
   maxTokens: 320,
   enabled: true,
@@ -304,10 +307,12 @@ export const useSettings = create<SettingsState>()(
     {
       name: 'warroom-settings.v1',
       storage: createJSONStorage(() => localStorage),
-      version: 3,
+      version: 4,
       // v1 predates eve.voice/eve.safety; v3 adds eve.safety.autoManage. Normalize
       // the eve config against current defaults so older payloads never leave a
       // nested field undefined (EveChatBody/actions read safety.autoManage etc.).
+      // v4 retires the dead groq default — prod's pool has no groq key, so any
+      // browser still carrying it had a permanently-mute Eve.
       migrate: (persisted, fromVersion) => {
         const p = (persisted ?? {}) as Partial<SettingsState>;
         if (fromVersion < 3 && p.eve) {
@@ -321,6 +326,9 @@ export const useSettings = create<SettingsState>()(
             },
             safety: { ...DEFAULT_EVE.safety, ...(e.safety ?? {}) },
           };
+        }
+        if (fromVersion < 4 && p.eve?.provider === 'groq') {
+          p.eve = { ...p.eve, provider: DEFAULT_EVE.provider, model: DEFAULT_EVE.model };
         }
         return p as SettingsState;
       },
