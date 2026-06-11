@@ -47,6 +47,15 @@ const QUICK_ACTIONS = [
   { label: '🤖 สถานะบอท', prompt: 'บอทเป็นยังไง' },
 ];
 
+// LLM replies render via dangerouslySetInnerHTML, so any markup in them would
+// execute in the operator's browser. Hostile customer strings (SMS sender
+// names, user names…) flow into the prompt via context.state — a prompt
+// injection could make the model echo e.g. <img onerror>. Escape everything;
+// the only formatting Eve's replies need is the \n → <br> we add ourselves.
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 // Top pending records (actual rows, not just counts) so Eve can name a SPECIFIC
 // withdrawal/SMS — "อนุมัติถอน #5 ฿2,000 ของคุณสมชาย" — instead of only knowing
 // "5 รายการรออยู่". Kept tiny (top 5, minimal fields) to fit the backend's
@@ -129,6 +138,11 @@ export function EveChatBody({
   const [draft, setDraft] = useState('');
   const [listening, setListening] = useState(false);
   const [interim, setInterim] = useState('');
+  // One turn at a time — rapid quick-action taps / Enter while Eve is thinking
+  // used to fire concurrent LLM calls. busyRef is the race-safe gate; busy
+  // mirrors it for disabling buttons.
+  const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
   const msgsRef = useRef<HTMLDivElement>(null);
   const listenHandleRef = useRef<ListenHandle | null>(null);
 
@@ -214,7 +228,13 @@ export function EveChatBody({
   const cancelPending = useCallback((id: string) => removePending(id), [removePending]);
 
   const respond = useCallback(
-    async (text: string, opts?: { forceLLM?: boolean }) => {
+    async (text: string, opts?: { forceLLM?: boolean; fromVoice?: boolean }) => {
+      // One in-flight turn at a time (callers also pre-check via busyRef so the
+      // user bubble never shows without a reply — this is the backstop).
+      if (busyRef.current) return;
+      busyRef.current = true;
+      setBusy(true);
+      try {
       // ── Phase A: client-side intent. If we can satisfy the request locally
       //    (navigate, refresh, toggle, open drawer, manage) do it now — no LLM
       //    round trip needed. Eve speaks an immediate ack.
@@ -292,13 +312,15 @@ export function EveChatBody({
           const reply = res.reply || 'Eve ตอบไม่ได้ในตอนนี้ค่ะ';
           const actions = parseActions(reply);
 
-          const displayText = stripActionTags(reply).replace(/\n/g, '<br>') ||
+          const displayText = escapeHtml(stripActionTags(reply)).replace(/\n/g, '<br>') ||
             'จัดการให้แล้วค่ะ ✦';
           addMessage({ role: 'eve', text: displayText });
           setMood(res.mood ?? 'talking');
           speakReply(displayText);
           if (actions.length > 0) {
-            const msgs = await runActions(actions);
+            // Voice-originated turns force the confirm card even in "จัดการเอง"
+            // mode — one misheard STT word must never auto-run a money action.
+            const msgs = await runActions(actions, { forceConfirm: opts?.fromVoice });
             if (msgs.length > 0) {
               addMessage({ role: 'eve', text: '<small class="text-2xs text-mute">' + msgs.join('<br>') + '</small>' });
             }
@@ -324,6 +346,10 @@ export function EveChatBody({
       setMood('concerned');
       speakReply(offline);
       setTimeout(() => setMood('idle'), 2400);
+      } finally {
+        busyRef.current = false;
+        setBusy(false);
+      }
     },
     [paired, messages, setMood, setTyping, setAiStatus, addMessage, eveCfg.provider, eveCfg.model, eveCfg.temperature, eveCfg.maxTokens, eveCfg.passContext, actionInstructions, speakReply, runActions],
   );
@@ -340,6 +366,7 @@ export function EveChatBody({
 
   const onQuick = useCallback(
     (prompt: string) => {
+      if (busyRef.current) return; // one turn at a time — no double-tap spam
       addMessage({ role: 'user', text: prompt });
       // Quick actions are informational — always answer via the LLM (with live
       // state), never short-circuit into a navigation intent.
@@ -349,6 +376,7 @@ export function EveChatBody({
   );
 
   const submitDraft = useCallback(() => {
+    if (busyRef.current) return; // Eve is mid-turn — keep the draft, retry after
     const v = draft.trim();
     if (!v) return;
     setDraft('');
@@ -381,9 +409,13 @@ export function EveChatBody({
       onPartial: (text) => setInterim(text),
       onFinal: (text) => {
         setInterim('');
-        if (eveCfg.voice.listen.autoSendOnFinal) {
+        // While Eve is mid-turn, fall back to the draft box instead of dropping
+        // the utterance (or firing a concurrent turn).
+        if (eveCfg.voice.listen.autoSendOnFinal && !busyRef.current) {
           addMessage({ role: 'user', text: text.replace(/</g, '&lt;') });
-          respond(text);
+          // fromVoice: managed actions from a voice turn always need a confirm
+          // card — STT mishears must never auto-run under "จัดการเอง".
+          respond(text, { fromVoice: true });
         } else {
           // Drop into the text box for the operator to confirm
           setDraft((d) => (d ? d + ' ' + text : text));
@@ -519,7 +551,7 @@ export function EveChatBody({
 
       <div className={compact ? 'eve-quick' : 'eve-quick eve-quick-lg'}>
         {QUICK_ACTIONS.map((q) => (
-          <button key={q.prompt} type="button" onClick={() => onQuick(q.prompt)}>
+          <button key={q.prompt} type="button" disabled={busy} onClick={() => onQuick(q.prompt)}>
             {q.label}
           </button>
         ))}

@@ -3,10 +3,11 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { usePathname } from 'next/navigation';
 import { useEve, type EveMood } from '@/lib/stores/eve';
-import { useSettings, isPaired as isPairedFn } from '@/lib/stores/settings';
-import { useAdminData, fetchEveSignals, type EveSignals } from '@/lib/api';
+import { useSettings } from '@/lib/stores/settings';
+import { type EveSignals } from '@/lib/api';
 import { EveAvatar } from './EveAvatar';
 import { EveChatBody } from './EveChatBody';
+import { useEveHealth } from './useEveHealth';
 
 // Eve always (re)starts anchored at the default bottom-right on a fresh mount /
 // reload. We deliberately do NOT persist the dragged position across reloads — a
@@ -104,58 +105,24 @@ const MOODS: EveMood[] = ['idle', 'happy', 'talking', 'thinking', 'concerned', '
 export function Eve() {
   const pathname = usePathname();
   const eveEnabled = useSettings((s) => s.eve.enabled);
-  const paired = useSettings((s) => isPairedFn(s));
-  const connStatus = useSettings((s) => s.connection.status);
   const {
-    mode, mood, aiStatus,
-    setMode, setMood, setTyping, addMessage, clearMessages,
+    mode, mood,
+    setMode, setMood, setTyping, setAiStatus, addMessage, clearMessages,
   } = useEve();
   const introPlayed = useRef(false);
 
-  // Live signal feed — Eve reads from this to know what's happening across
-  // the system. Refreshes every 30s so her status badge stays current.
-  const signalsFeed = useAdminData({
-    key: 'eve-signals',
-    fetcher: () => fetchEveSignals(),
-    mock: null as unknown as EveSignals,
-    intervalOverride: 30,
-  });
-  const signals = signalsFeed.source === 'live' ? signalsFeed.data : null;
+  // Live signal feed + honest connectivity badge — shared with the /eve page
+  // via useEveHealth so the dock and the full page can never disagree.
+  const { paired, connStatus, signals, signalsSource, health, healthDot, healthText } = useEveHealth();
 
-  // Honest connectivity for the status badge — Eve must NOT claim "online" while
-  // she can't actually reach the AI. Priority:
-  //   not paired                            → 'offline' (no backend at all)
-  //   last chat failed, or AI pool drained  → 'ai-down'
-  //   confirmed chat / healthy pool          → 'online'
-  // keys_active === 0 means zero usable AI keys → always AI-down (a stale prior
-  // 'online' can't mask it); the providers-offline heuristic only fills in the gap
-  // before the first real chat attempt sets aiStatus.
-  const noKeys = signals != null && signals.ai_pool.keys_active === 0;
-  const poolDrained =
-    signals != null &&
-    signals.ai_pool.keys_active > 0 &&
-    signals.ai_pool.providers_offline >= signals.ai_pool.keys_active;
-  // Paired but the signals feed itself is erroring (network/500/timeout — NOT a
-  // 401, which already flips `paired` false). Eve's backend is unreachable, so
-  // don't claim online. A confirmed chat (aiStatus==='online') still wins.
-  const signalsErrored = signalsFeed.source === 'error';
-  const health: 'offline' | 'ai-down' | 'online' = !paired
-    ? 'offline'
-    : noKeys || aiStatus === 'offline' || (aiStatus !== 'online' && (poolDrained || signalsErrored))
-    ? 'ai-down'
-    : 'online';
-  const healthDot = health === 'online' ? '#10b981' : health === 'ai-down' ? '#f59e0b' : '#6b7280';
-  // 'error' = was paired then the token died / call failed → nudge re-pair.
-  // 'idle'  = never connected this session.
-  const offlineText = connStatus === 'error' ? 'เชื่อมต่อหลุด · ต่อใหม่ใน Settings' : 'ออฟไลน์ · ยังไม่เชื่อมต่อ';
-  const healthText =
-    health === 'offline'
-      ? offlineText
-      : health === 'ai-down'
-      ? 'AI ออฟไลน์ · เชื่อมต่อไม่ได้'
-      : signals
-      ? signals.alert.headline
-      : 'ออนไลน์ · เฝ้าระบบ';
+  // Re-pair → forget the last chat verdict. A stale 'offline' from the dead
+  // token would otherwise keep the badge amber until the first successful chat,
+  // even though the operator just reconnected.
+  const prevPairedRef = useRef(paired);
+  useEffect(() => {
+    if (!prevPairedRef.current && paired) setAiStatus('unknown');
+    prevPairedRef.current = paired;
+  }, [paired, setAiStatus]);
 
   // Track which threshold-crossings we've already announced so Eve doesn't
   // re-narrate the same alert every 30s.
@@ -194,7 +161,7 @@ export function Eve() {
   useEffect(() => {
     if (introPlayed.current) return;
     // If paired and we haven't loaded signals yet, give it one beat.
-    if (paired && !signals && signalsFeed.source !== 'error') return;
+    if (paired && !signals && signalsSource !== 'error') return;
     introPlayed.current = true;
     let cancelled = false;
     let acc = 400;
@@ -220,7 +187,7 @@ export function Eve() {
     return () => {
       cancelled = true;
     };
-  }, [setMood, setTyping, addMessage, paired, signals, signalsFeed.source]);
+  }, [setMood, setTyping, addMessage, paired, signals, signalsSource]);
 
   // eve:alert listener — any page can trigger Eve to bounce open + react.
   useEffect(() => {
@@ -302,8 +269,10 @@ export function Eve() {
   }, []);
 
   // Hide the floating widget on the dedicated /eve page — the page itself
-  // renders a full-size Eve, no need for duplication.
-  if (pathname === '/eve') return null;
+  // renders a full-size Eve, no need for duplication. next.config has
+  // trailingSlash:true, so the exported site reports '/eve/' — strip it before
+  // comparing or the dock duplicates on the page it was meant to hide on.
+  if (pathname.replace(/\/+$/, '') === '/eve') return null;
 
   // Master switch from Settings → Eve AI tab. When off, the floating dock
   // disappears entirely (operator can re-enable from Settings).

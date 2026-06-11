@@ -3,6 +3,7 @@
 import { useEve, type EveMood } from '@/lib/stores/eve';
 import { EveAvatar } from '@/components/eve/EveAvatar';
 import { EveChatBody } from '@/components/eve/EveChatBody';
+import { useEveHealth } from '@/components/eve/useEveHealth';
 import { Pill } from '@/components/ui/Pill';
 import { cn } from '@/lib/utils';
 
@@ -19,14 +20,20 @@ const MOOD_LABEL: Record<EveMood, string> = {
 
 export default function EvePage() {
   const { mood, setMood, clearMessages, messages } = useEve();
+  // Same honest-connectivity derivation as the floating dock — the old header
+  // hardcoded a green "● ออนไลน์" pill + a fabricated "v0.7 · qwen-72b" label,
+  // so this page claimed online even unpaired / with the AI unreachable.
+  const { health, healthText } = useEveHealth();
 
   return (
     <div className="flex flex-col h-full min-h-0">
       <header className="h-12 flex items-center border-b border-line bg-panel2/40 px-3 gap-3 shrink-0">
         <span className="dot dot-mystic" />
         <span className="t-h">คุย Eve · AI ASSIST</span>
-        <Pill tone="mystic">v0.7 · qwen-72b</Pill>
-        <Pill tone="ok">● ออนไลน์ · {MOOD_LABEL[mood]}</Pill>
+        <Pill tone={health === 'online' ? 'ok' : health === 'ai-down' ? 'warn' : 'dim'}>
+          ● {healthText}
+        </Pill>
+        <Pill tone="mystic">{MOOD_LABEL[mood]}</Pill>
         <div className="flex-1" />
         <button onClick={clearMessages} className="btn btn-crit">
           🗑 ล้างประวัติ ({messages.length})
@@ -95,7 +102,7 @@ export default function EvePage() {
               <span className="font-rune text-base tracking-[.2em] text-mystic">EVE</span>
               <Pill tone="mystic">AI ASSIST</Pill>
               <div className="flex-1" />
-              <span className="text-2xs text-mute mono">v0.7 · qwen-72b</span>
+              <span className="text-2xs text-mute mono">{healthText}</span>
             </div>
             <div className="text-2xs text-dim mt-1">
               ผู้ช่วย AI ประจำ War Room — สรุปคิว · ตอบคำถาม · แจ้งเตือนเคสวิกฤต
