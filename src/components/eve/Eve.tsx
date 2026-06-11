@@ -19,14 +19,23 @@ const DEFAULT_POS: DragPos = { right: 14, bottom: 36 };
 
 function clampPos(p: DragPos, dockEl: HTMLElement | null): DragPos {
   if (typeof window === 'undefined') return p;
-  // Keep at least 60×60 px of the dock on-screen so the user can always grab it.
+  // Keep at least 60×60 px of the dock on-screen so the user can always grab
+  // it — and when the dock is SMALLER than that (the 56px launcher), keep the
+  // whole thing visible: 60px-of-340px is fine for the panel, but 60px-rule on
+  // a 56px button used to let it sit entirely past the edge.
   const w = dockEl?.offsetWidth ?? 80;
   const h = dockEl?.offsetHeight ?? 80;
+  const visW = Math.min(w, 60);
+  const visH = Math.min(h, 60);
   const vw = window.innerWidth;
   const vh = window.innerHeight;
+  // A backgrounded/minimized window can report a ~0 viewport — clamping
+  // against that "ขนาดจอ 0" stranded the dock at e.g. right:-56px (off-screen
+  // for good once it became the 56px launcher). Don't clamp against lies.
+  if (vw < 100 || vh < 100) return p;
   return {
-    right: Math.max(8 - (w - 60), Math.min(vw - 60, p.right)),
-    bottom: Math.max(8 - (h - 60), Math.min(vh - 60, p.bottom)),
+    right: Math.max(8 - (w - visW), Math.min(vw - visW, p.right)),
+    bottom: Math.max(8 - (h - visH), Math.min(vh - visH, p.bottom)),
   };
 }
 
@@ -221,6 +230,16 @@ export function Eve() {
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
+
+  // Re-clamp whenever the dock changes shape (open ⇄ min ⇄ hidden). A position
+  // that was legal for the 340px panel (allowed to hang most of itself past the
+  // edge) strands the 56px launcher ENTIRELY off-screen — "กดปิดแล้วกดอีกที
+  // ไม่ออกมา" because there was literally nothing left to click. useEffect runs
+  // after the DOM commit, so the dock already has its new size here (no rAF —
+  // rAF never fires in a backgrounded tab).
+  useEffect(() => {
+    setPos((p) => clampPos(p, dockRef.current));
+  }, [mode]);
 
   const onPointerDown = useCallback((e: React.PointerEvent) => {
     // Only initiate drag on primary button + when we have a starting point.
