@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { CHAT_TEMPLATES, CHAT_THREADS, type ChatThread } from '@/lib/mock/chat-page';
+import { CHAT_TEMPLATES, CHAT_THREADS, type ChatThread, type ChatStage } from '@/lib/mock/chat-page';
 import { ChannelChip, Pill } from '@/components/ui/Pill';
 import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { Switch } from '@/components/ui/Switch';
@@ -11,7 +11,7 @@ import { Kbd } from '@/components/ui/Kbd';
 import { useWarroom } from '@/lib/stores/warroom';
 import { useFortuneFeed, sendChatMessage, suggestChatReply, fetchReadingTranscript, fetchFortuneWorkersQueue, fetchBanStatus, banUser, unbanUser, markReadingPaid, fetchUserReadings, takeoverChat, resumeChatBot, fetchChatTakeoverStatus, useAdminData, describeError, type ReadingTranscriptMessage, type FortuneWorkersQueue, type WorkerCallRow, type BanStatusResponse } from '@/lib/api';
 import { useSettings, isPaired as isPairedFn } from '@/lib/stores/settings';
-import { readingToChatThread } from '@/lib/adapters/chat';
+import { readingToChatThread, STAGE_META } from '@/lib/adapters/chat';
 import { cn } from '@/lib/utils';
 
 // Static-export builds require useSearchParams() to be inside a Suspense
@@ -38,6 +38,12 @@ function ChatPageInner() {
   const [filter, setFilter] = useState('');
   const [channelFilter, setChannelFilter] = useState('');
   const [onlyAdmin, setOnlyAdmin] = useState(false);
+
+  // 🔲 (2026-06-11) Multi-view — realtime grid of EVERY conversation with its
+  //   funnel stage (เลือกไพ่ / กำลังทำนาย / รอตัดสินใจจ่าย / รอคำทำนาย). Hot
+  //   stages auto-surface to the top; click a tile to drop into single-chat.
+  const [viewMode, setViewMode] = useState<'single' | 'multi'>('single');
+  const [stageFilter, setStageFilter] = useState<ChatStage | ''>('');
 
   // 🪪 (2026-05-24) Deep-link target from /workers → /chat?thread=r-{id}|fb-{psid}
   //   Read once on mount + whenever it changes. Falls through to the first
@@ -180,6 +186,71 @@ function ChatPageInner() {
 
   // "In-flight" = call landed in the last 30s. Drives the typing-dots animation.
   const workerIsLive = !!activeWorker && (activeWorker.age_seconds ?? 999) <= 30;
+
+  // 🔲 (2026-06-11) Multi-view staging — every thread gets an effective stage:
+  //   a live in-flight AI call (workers queue, ≤60s old) overrides to
+  //   'predicting'; otherwise the row-derived stage from the adapter. Sorted by
+  //   stage heat then recency, so people picking cards / mid-prediction /
+  //   deciding-to-pay bubble to the top automatically on every poll tick.
+  const inFlightIndex = useMemo(() => {
+    const byReading = new Map<number, WorkerCallRow>();
+    const byPsid = new Map<string, WorkerCallRow>();
+    for (const r of workersFeed.data?.in_flight ?? []) {
+      if (r.reading_id != null) byReading.set(Number(r.reading_id), r);
+      if (r.fb_user_id) byPsid.set(String(r.fb_user_id), r);
+    }
+    return { byReading, byPsid };
+  }, [workersFeed.data]);
+
+  const staged = useMemo(() => {
+    return threads
+      .map((t) => {
+        const rid = readingIdOf(t.id);
+        const w =
+          (rid != null ? inFlightIndex.byReading.get(rid) : undefined) ??
+          (t.psid ? inFlightIndex.byPsid.get(t.psid) : undefined);
+        const live = !!w && (w.age_seconds ?? 999) <= 60;
+        const stage: ChatStage = live ? 'predicting' : t.stage ?? 'idle';
+        return { t, stage, worker: live ? w : undefined };
+      })
+      .sort(
+        (a, b) =>
+          STAGE_META[a.stage].prio - STAGE_META[b.stage].prio ||
+          (b.t.lastTsMs ?? 0) - (a.t.lastTsMs ?? 0),
+      );
+  }, [threads, inFlightIndex]);
+
+  const stageCounts = useMemo(() => {
+    const c: Record<ChatStage, number> = { predicting: 0, celtic: 0, deciding: 0, waiting: 0, idle: 0 };
+    for (const s of staged) c[s.stage]++;
+    return c;
+  }, [staged]);
+
+  // Auto-surface flash — a thread that just ENTERED a hot stage (started
+  // picking cards, AI started predicting, bill issued) pulses for a few
+  // seconds so the operator's eye lands on it without hunting.
+  const prevStagesRef = useRef<Record<string, ChatStage>>({});
+  const [flashIds, setFlashIds] = useState<Set<string>>(() => new Set());
+  useEffect(() => {
+    const prev = prevStagesRef.current;
+    const next: Record<string, ChatStage> = {};
+    const newlyHot: string[] = [];
+    for (const { t, stage } of staged) {
+      next[t.id] = stage;
+      if (stage !== prev[t.id] && stage !== 'idle') newlyHot.push(t.id);
+    }
+    prevStagesRef.current = next;
+    if (newlyHot.length === 0) return;
+    setFlashIds((s) => new Set([...s, ...newlyHot]));
+    const timer = setTimeout(() => {
+      setFlashIds((s) => {
+        const n = new Set(s);
+        for (const id of newlyHot) n.delete(id);
+        return n;
+      });
+    }, 6000);
+    return () => clearTimeout(timer);
+  }, [staged]);
 
   // 📜 Real recent-reading history for the active customer's sidebar — replaces
   //    the old hardcoded list + the fabricated "ดูดวงทั้งหมด" count. Fetched by
@@ -455,12 +526,22 @@ function ChatPageInner() {
   };
 
   return (
-    <div className="grid h-full min-h-0" style={{ gridTemplateColumns: '280px 1fr 320px' }}>
+    <div
+      className="grid h-full min-h-0"
+      style={{ gridTemplateColumns: viewMode === 'multi' ? '280px 1fr' : '280px 1fr 320px' }}
+    >
       <aside className="border-r border-line flex flex-col bg-panel2/30 min-h-0">
         <div className="p-2 border-b border-line space-y-1.5">
           <div className="flex items-center gap-2 px-1 mb-1">
             <span className="t-h">แชต · LIVE</span>
             <DataSourceBadge source={feed.source} isLoading={feed.isLoading} error={feed.error} />
+            <button
+              onClick={() => setViewMode((v) => (v === 'multi' ? 'single' : 'multi'))}
+              className={cn('pill ml-auto', viewMode === 'multi' ? 'pill-mystic' : 'pill-dim')}
+              title="มัลติวิว — เห็นทุกแชตพร้อมขั้นตอน (เลือกไพ่ / ทำนาย / รอจ่าย) แบบเรียลไทม์"
+            >
+              🔲 มัลติ
+            </button>
           </div>
           <input
             type="text"
@@ -490,7 +571,10 @@ function ChatPageInner() {
             return (
               <button
                 key={c.id}
-                onClick={() => setActiveId(c.id)}
+                onClick={() => {
+                  setActiveId(c.id);
+                  setViewMode('single'); // เลือกมาแชท — drop out of the grid
+                }}
                 className={cn(
                   'w-full text-left px-3 py-2.5 border-b border-lined hover:bg-rowhi',
                   isActive && 'bg-info/8 border-l-2 border-l-info',
@@ -523,6 +607,71 @@ function ChatPageInner() {
         </div>
       </aside>
 
+      {/* 🔲 (2026-06-11) Multi-view — realtime grid of every conversation. */}
+      {viewMode === 'multi' && (
+        <section className="flex flex-col bg-base min-h-0">
+          <header className="px-4 py-2 border-b border-line bg-panel2/40 flex items-center gap-1.5 flex-wrap">
+            <span className="t-h shrink-0">มัลติวิว · ทุกแชตเรียลไทม์</span>
+            <button
+              onClick={() => setStageFilter('')}
+              className={cn('pill', stageFilter === '' ? 'pill-info' : 'pill-dim')}
+            >
+              ทั้งหมด {staged.length}
+            </button>
+            {(Object.keys(STAGE_META) as ChatStage[]).map((s) => (
+              <button
+                key={s}
+                onClick={() => setStageFilter((cur) => (cur === s ? '' : s))}
+                className={cn('pill', stageFilter === s ? 'pill-mystic' : 'pill-dim')}
+                style={stageCounts[s] > 0 && s !== 'idle' ? { borderColor: STAGE_META[s].color + '88', color: STAGE_META[s].color } : undefined}
+              >
+                {STAGE_META[s].icon} {STAGE_META[s].label} {stageCounts[s]}
+              </button>
+            ))}
+            <span className="text-2xs text-mute ml-auto shrink-0">
+              ขั้นตอนร้อนเด้งขึ้นบนสุดอัตโนมัติ · กดการ์ดเพื่อเข้าแชท
+            </span>
+          </header>
+          <div className="flex-1 overflow-y-auto p-3 min-h-0 scanline">
+            {(() => {
+              const shown = staged.filter((s) => !stageFilter || s.stage === stageFilter);
+              if (shown.length === 0) {
+                return (
+                  <div className="grid place-items-center h-full text-mute text-sm">
+                    {stageFilter
+                      ? `ไม่มีแชตในขั้น "${STAGE_META[stageFilter].label}" ตอนนี้`
+                      : 'ยังไม่มีแชต'}
+                  </div>
+                );
+              }
+              return (
+                <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))' }}>
+                  {shown.map(({ t, stage, worker }) => (
+                    <MultiTile
+                      key={t.id}
+                      thread={t}
+                      stage={stage}
+                      workerProvider={worker?.provider ?? null}
+                      flash={flashIds.has(t.id)}
+                      canApprove={paired && t.isPaid === false && readingIdOf(t.id) != null}
+                      onOpen={() => {
+                        setActiveId(t.id);
+                        setViewMode('single');
+                      }}
+                      onApprove={() => {
+                        setActiveId(t.id);
+                        setApproveOpen(true);
+                      }}
+                    />
+                  ))}
+                </div>
+              );
+            })()}
+          </div>
+        </section>
+      )}
+
+      {viewMode === 'single' && (
       <section className="flex flex-col bg-base min-h-0">
         {active && (
           <>
@@ -785,8 +934,9 @@ function ChatPageInner() {
           </>
         )}
       </section>
+      )}
 
-      {active && (
+      {viewMode === 'single' && active && (
         <aside className="border-l border-line flex flex-col bg-panel2/30 min-h-0 overflow-y-auto">
           <div className="p-4 border-b border-line">
             <div
@@ -1199,6 +1349,106 @@ function ActiveWorkerBadge({ w, live }: { w: WorkerCallRow; live: boolean }) {
       </span>
       <span className="text-mute mono">· {age}s</span>
     </Link>
+  );
+}
+
+// 🔲 (2026-06-11) One conversation card in the multi-view grid. Stage-coloured
+// border, live stage badge (+ provider while the AI is generating), last
+// message snippet, and quick actions: open the chat / approve the bill.
+function MultiTile({
+  thread: t,
+  stage,
+  workerProvider,
+  flash,
+  canApprove,
+  onOpen,
+  onApprove,
+}: {
+  thread: ChatThread;
+  stage: ChatStage;
+  workerProvider: string | null;
+  flash: boolean;
+  canApprove: boolean;
+  onOpen: () => void;
+  onApprove: () => void;
+}) {
+  const meta = STAGE_META[stage];
+  const hot = stage !== 'idle';
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
+      className={cn(
+        'text-left rounded-lg border bg-panel p-2.5 cursor-pointer transition-colors hover:bg-rowhi flex flex-col gap-1.5',
+        flash && 'animate-pulse',
+      )}
+      style={{
+        borderColor: hot ? meta.color + '66' : undefined,
+        boxShadow: hot ? `0 0 10px ${meta.color}22` : undefined,
+      }}
+      title="กดเพื่อเปิดแชทนี้"
+    >
+      <div className="flex items-center gap-1.5 min-w-0">
+        <ChannelChip channel={t.channel === 'LINE' ? 'line' : 'fb'} />
+        <span className="text-sm text-fg font-medium truncate flex-1">{t.name}</span>
+        {t.vip && <Pill tone="warn">VIP</Pill>}
+        <span className="text-2xs mono text-mute shrink-0">{t.lastTs}</span>
+      </div>
+
+      <div
+        className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-2xs self-start"
+        style={{
+          background: meta.color + '1a',
+          border: `1px solid ${meta.color}55`,
+          color: meta.color,
+        }}
+      >
+        {stage === 'predicting' && (
+          <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: meta.color, boxShadow: `0 0 4px ${meta.color}` }} />
+        )}
+        <span className="font-semibold">
+          {meta.icon} {meta.label}
+          {stage === 'predicting' && workerProvider ? ` · ${workerProvider}` : ''}
+        </span>
+      </div>
+
+      <div className="text-2xs text-dim line-clamp-2 break-words flex-1">{t.last}</div>
+
+      <div className="flex items-center gap-1.5">
+        {t.due > 0 && (
+          <span className="text-2xs text-warn mono shrink-0">บิล ฿{t.due.toLocaleString()}</span>
+        )}
+        <div className="flex-1" />
+        {canApprove && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onApprove();
+            }}
+            className="btn btn-ok text-2xs py-0.5"
+            title="อนุมัติชำระ — ส่งคำทำนายให้ลูกค้าทันที"
+          >
+            ✓ อนุมัติ
+          </button>
+        )}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpen();
+          }}
+          className="btn btn-ghost text-2xs py-0.5"
+        >
+          💬 แชท
+        </button>
+      </div>
+    </div>
   );
 }
 

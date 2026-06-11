@@ -1,5 +1,40 @@
-import type { ChatThread, ChatMessage } from '@/lib/mock/chat-page';
+import type { ChatThread, ChatMessage, ChatStage } from '@/lib/mock/chat-page';
 import type { FortuneReading } from '@/lib/api';
+
+// ── 🔲 Funnel stages (multi-view) ────────────────────────────────────────────
+
+/** Display metadata per stage. `prio` orders the multi-view grid — hot stages
+ *  (live prediction, card-picking, payment decision) float to the top. */
+export const STAGE_META: Record<ChatStage, { label: string; icon: string; prio: number; color: string }> = {
+  predicting: { label: 'AI กำลังทำนาย', icon: '🔮', prio: 0, color: '#8b5cf6' },
+  celtic:     { label: 'กำลังเลือกไพ่ · Celtic', icon: '🃏', prio: 1, color: '#22d3ee' },
+  deciding:   { label: 'รอตัดสินใจชำระ', icon: '💰', prio: 2, color: '#f59e0b' },
+  waiting:    { label: 'จ่ายแล้ว · รอคำทำนาย', icon: '⏳', prio: 3, color: '#f43f5e' },
+  idle:       { label: 'คุยทั่วไป', icon: '💬', prio: 9, color: '#6b7280' },
+};
+
+function looksCeltic(r: FortuneReading): boolean {
+  return (
+    (r.response_type ?? '').toLowerCase().includes('celtic') ||
+    (r.reading_type ?? '').toLowerCase().includes('celtic')
+  );
+}
+
+/**
+ * Derive the funnel stage from the reading row alone. The resource doesn't
+ * expose the backend's fine-grained status column (CELTIC_WAITING_CARDS …),
+ * so we infer from payment/response state:
+ *   bill issued + unpaid            → deciding   (ลูกค้ากำลังตัดสินใจจ่าย)
+ *   paid + no reading yet + celtic  → celtic     (อยู่ในขั้นเลือกไพ่/ตอบคำถาม)
+ *   paid + no reading yet           → waiting    (คิวส่งคำทำนาย — stuck ถ้านาน)
+ * 'predicting' is NOT decidable here — the chat page overlays it live from
+ * the workers queue (an actual in-flight AI call for this reading).
+ */
+export function stageOfReading(r: FortuneReading): ChatStage {
+  if (!r.is_paid && r.amount_paid > 0) return 'deciding';
+  if (r.is_paid && !r.ai_response) return looksCeltic(r) ? 'celtic' : 'waiting';
+  return 'idle';
+}
 
 /**
  * Synthesize a ChatThread from a FortuneReading.
@@ -43,6 +78,8 @@ export function readingToChatThread(r: FortuneReading): ChatThread {
     psid,
     userId: r.user?.id ?? null,
     openedAt,
+    stage: stageOfReading(r),
+    lastTsMs: parseMs(r.responded_at) ?? parseMs(r.paid_at) ?? parseMs(r.created_at) ?? 0,
     bot,
     sentiment,
     last: truncate(last, 80),
@@ -138,6 +175,12 @@ function bucketRarity(ltv: number): ChatThread['rarity'] {
 
 function clamp(n: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, n));
+}
+
+function parseMs(iso?: string | null): number | null {
+  if (!iso) return null;
+  const n = Date.parse(iso);
+  return Number.isFinite(n) ? n : null;
 }
 
 function formatTime(iso?: string | null): string {

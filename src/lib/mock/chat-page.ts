@@ -12,6 +12,16 @@ export type ChatMessage = {
   image_url?: string | null;
 };
 
+// 🔲 (2026-06-11) Funnel stage for the multi-view grid. Derived from the
+//   reading row (adapters/chat.ts) except 'predicting', which the chat page
+//   overlays live from the workers queue (an in-flight AI call right now).
+export type ChatStage =
+  | 'predicting' // 🔮 AI กำลังทำนายอยู่ตอนนี้ (live worker call)
+  | 'celtic'     // 🃏 อยู่ใน Celtic flow — เลือกไพ่/ตอบคำถาม (จ่ายแล้ว ยังไม่มีคำทำนาย)
+  | 'deciding'   // 💰 มีบิลค้าง — กำลังตัดสินใจชำระ
+  | 'waiting'    // ⏳ จ่ายแล้ว รอคำทำนายส่ง
+  | 'idle';      // คุยทั่วไป / จบแล้ว
+
 export type ChatThread = {
   id: string;
   name: string;
@@ -19,6 +29,10 @@ export type ChatThread = {
   psid: string;
   userId?: number | null;
   openedAt: string;
+  // 🔲 (2026-06-11) Multi-view: funnel stage + epoch ms of last activity
+  //   (lastTs is a display string — useless for ordering).
+  stage?: ChatStage;
+  lastTsMs?: number;
   bot: boolean;
   takenBy?: { initial: string; color: string };
   takenByName?: string;
