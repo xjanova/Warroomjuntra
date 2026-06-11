@@ -261,8 +261,10 @@ export function Eve() {
       startBottom: pos.bottom,
     };
     hasMovedRef.current = false;
-    setIsDragging(true);
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    // ⚠ Do NOT setPointerCapture here. Capturing on pointerdown retargets the
+    // subsequent click event to the dock (common ancestor of down/up targets),
+    // so the launcher/pill onClick never fired — "กดแล้วไม่ขยายออก". Capture
+    // starts only once real movement begins (see onPointerMove).
   }, [pos.right, pos.bottom]);
 
   const onPointerMove = useCallback((e: React.PointerEvent) => {
@@ -271,7 +273,17 @@ export function Eve() {
     const dx = e.clientX - s.startX;
     const dy = e.clientY - s.startY;
     if (!hasMovedRef.current && Math.hypot(dx, dy) < 4) return; // ignore tiny jitter — keeps clicks working
-    hasMovedRef.current = true;
+    if (!hasMovedRef.current) {
+      // Real drag begins — capture from here on so fast moves can't escape the
+      // dock. A clean click never reaches this branch and stays a normal click.
+      hasMovedRef.current = true;
+      setIsDragging(true);
+      try {
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      } catch {
+        /* capture unsupported — drag still works while the pointer stays inside */
+      }
+    }
     setPos(clampPos({ right: s.startRight - dx, bottom: s.startBottom - dy }, dockRef.current));
   }, []);
 
