@@ -1,6 +1,7 @@
 'use client';
 
 import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
 
 export type EveMode = 'open' | 'min' | 'hidden';
 export type EveMood = 'idle' | 'happy' | 'talking' | 'thinking' | 'concerned' | 'surprise';
@@ -59,7 +60,9 @@ type EveState = {
   removePending: (id: string) => void;
 };
 
-export const useEve = create<EveState>((set) => ({
+export const useEve = create<EveState>()(
+  persist(
+    (set) => ({
   mode: 'open',
   mood: 'idle',
   typing: false,
@@ -99,4 +102,17 @@ export const useEve = create<EveState>((set) => ({
       pending: s.pending.map((p) => (p.id === id ? { ...p, status, result: result ?? p.result } : p)),
     })),
   removePending: (id) => set((s) => ({ pending: s.pending.filter((p) => p.id !== id) })),
-}));
+    }),
+    {
+      name: 'warroom-eve.v1',
+      storage: createJSONStorage(() => localStorage),
+      version: 1,
+      // 🧠 (2026-06-12) Persist ONLY the conversation (last 40 messages) so a
+      // reload no longer wipes Eve's thread — the LLM keeps receiving real
+      // history and the operator never has to ท้าวความ. mood/typing are
+      // ephemeral; pending confirm cards must NEVER survive a reload (stale
+      // money actions); face geometry stays default.
+      partialize: (s) => ({ messages: s.messages.slice(-40) }),
+    },
+  ),
+);

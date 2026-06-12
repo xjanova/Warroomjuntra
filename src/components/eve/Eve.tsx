@@ -119,6 +119,11 @@ export function Eve() {
     setMode, setMood, setTyping, setAiStatus, addMessage, clearMessages,
   } = useEve();
   const introPlayed = useRef(false);
+  // Snapshot at FIRST RENDER (before any effect runs): restored-from-storage
+  // history means skip the intro. Checked at mount-time because the proactive
+  // signal nudges also add messages in effects and would otherwise win the
+  // race and suppress the intro for genuinely-fresh sessions.
+  const hadHistoryAtMount = useRef(useEve.getState().messages.length > 0);
 
   // Live signal feed + honest connectivity badge — shared with the /eve page
   // via useEveHealth so the dock and the full page can never disagree.
@@ -169,6 +174,12 @@ export function Eve() {
   // Waits up to ~3s for the first signals tick so the intro is data-aware.
   useEffect(() => {
     if (introPlayed.current) return;
+    // 🧠 Restored conversation (persisted across reloads) → skip the intro;
+    // replaying it would bury the thread the operator is continuing.
+    if (hadHistoryAtMount.current) {
+      introPlayed.current = true;
+      return;
+    }
     // If paired and we haven't loaded signals yet, give it one beat.
     if (paired && !signals && signalsSource !== 'error') return;
     introPlayed.current = true;
