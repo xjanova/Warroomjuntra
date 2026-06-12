@@ -339,7 +339,9 @@ export function EveChatBody({
 
           // Parse any action markers from the reply, run them (mode-gated), strip from display.
           const reply = res.reply || 'Eve ตอบไม่ได้ในตอนนี้ค่ะ';
-          const actions = parseActions(reply);
+          // REMEMBER is a server-side memory tag (extracted+stored by the
+          // backend). An older backend may leak it through — never "execute" it.
+          const actions = parseActions(reply).filter((a) => (a.tag as string) !== 'REMEMBER');
 
           const displayText = escapeHtml(stripActionTags(reply)).replace(/\n/g, '<br>') ||
             'จัดการให้แล้วค่ะ ✦';
