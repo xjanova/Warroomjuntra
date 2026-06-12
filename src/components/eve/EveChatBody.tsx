@@ -359,7 +359,19 @@ export function EveChatBody({
         } catch (e) {
           setTyping(false);
           setAiStatus('offline'); // chat failed → mark AI unreachable so the badge stops lying
-          const err = '<i>Eve ออฟไลน์ — เชื่อมต่อ AI ไม่ได้ตอนนี้ค่ะ 🔌</i><br><small class="text-2xs text-mute">' + describeError(e) + '</small>';
+          const detail = describeError(e);
+          // Token died → no Eve-AI setting can fix this; say so and hand the
+          // operator a one-click path to the connection tab instead of letting
+          // them fiddle with provider/model ("ตั้งค่าไม่มีผล").
+          const isAuth = /401|403|token/i.test(detail);
+          const err =
+            '<i>Eve ออฟไลน์ — เชื่อมต่อ AI ไม่ได้ตอนนี้ค่ะ 🔌</i><br><small class="text-2xs text-mute">' +
+            detail +
+            '</small>' +
+            (isAuth
+              ? '<br><b>การเชื่อมต่อหมดอายุ — ต้องจับคู่ใหม่ค่ะ (ปรับ provider/model ไม่ช่วยนะคะ)</b>'
+              : '') +
+            '<br><u data-action="open-settings" style="cursor:pointer" class="text-info">⚙ กดที่นี่เพื่อเปิดหน้าเชื่อมต่อ</u>';
           addMessage({ role: 'eve', text: err });
           setMood('concerned');
           setTimeout(() => setMood('idle'), 2400);
@@ -370,7 +382,9 @@ export function EveChatBody({
       // 🧹 (2026-06-04) Unpaired → Eve is honestly OFFLINE. No canned demo replies
       //   (those faked metrics). She only talks via the real LLM when connected.
       setTyping(false);
-      const offline = 'Eve ออฟไลน์อยู่ค่ะ — ยังเชื่อมต่อ AI ไม่ได้ 🔌 เชื่อมต่อใน <b>Settings → การเชื่อมต่อ</b> ก่อนถึงจะคุยกับ Eve ได้นะคะ';
+      const offline =
+        'Eve ออฟไลน์อยู่ค่ะ — ยังเชื่อมต่อ AI ไม่ได้ 🔌 เชื่อมต่อใน <b>Settings → การเชื่อมต่อ</b> ก่อนถึงจะคุยกับ Eve ได้นะคะ' +
+        '<br><u data-action="open-settings" style="cursor:pointer" class="text-info">⚙ กดที่นี่เพื่อเปิดหน้าเชื่อมต่อ</u>';
       addMessage({ role: 'eve', text: '<i>' + offline + '</i>' });
       setMood('concerned');
       speakReply(offline);
@@ -384,6 +398,11 @@ export function EveChatBody({
   );
 
   const onAction = useCallback((action: string) => {
+    if (action === 'open-settings') {
+      // One-click path to Settings → การเชื่อมต่อ from Eve's offline message.
+      useWarroom.getState().setSettingsOpen(true);
+      return;
+    }
     if (action === 'open-crit') {
       // Open the case drawer straight through the store. The previous
       // CustomEvent('warroom:open-case') had no listener anywhere — it was a
