@@ -149,18 +149,12 @@ function ChatPageInner() {
   const transcriptLoading = transcriptFeed.isLoading && !transcriptFeed.data ? activeReadingId : null;
   const transcriptMessages = transcriptFeed.data?.messages ?? null;
 
-  const filtered = useMemo(
-    () =>
-      threads.filter((c) => {
-        if (channelFilter && c.channel !== channelFilter) return false;
-        if (onlyAdmin && bot[c.id]) return false;
-        if (filter && !c.name.toLowerCase().includes(filter.toLowerCase())) return false;
-        return true;
-      }),
-    [threads, filter, channelFilter, onlyAdmin, bot],
-  );
-
+  // active resolves against the FULL per-reading `threads` (NOT the deduped
+  //   customer list) so a representative-reading change between polls can never
+  //   invalidate the operator's open chat. activeCustomerKey drives which
+  //   customer card is highlighted in the grid/sidebar.
   const active = threads.find((c) => c.id === activeId);
+  const activeCustomerKey = active?.customerKey ?? null;
 
   // 🪪 (2026-05-24) Find the live AI worker handling THIS thread right now.
   //   Match by reading_id first (most precise), then by fb_user_id (when the
@@ -203,31 +197,113 @@ function ChatPageInner() {
     return { byReading, byPsid };
   }, [workersFeed.data]);
 
-  const staged = useMemo(() => {
-    return threads
-      .map((t) => {
-        const base: ChatStage = t.stage ?? 'idle';
-        const rid = readingIdOf(t.id);
-        const w =
-          (rid != null ? inFlightIndex.byReading.get(rid) : undefined) ??
-          (t.psid ? inFlightIndex.byPsid.get(t.psid) : undefined);
-        const live = !!w && (w.age_seconds ?? 999) <= 60;
-        // Cancelled rows are terminal — a stale worker entry must not revive them.
-        const cancelled = base === 'cancelled_user' || base === 'cancelled_system';
-        const stage: ChatStage = live && !cancelled ? 'predicting' : base;
-        return { t, stage, worker: live && !cancelled ? w : undefined };
-      })
-      .sort(
+  // Per-reading EFFECTIVE stage: the adapter's row-derived stage, overlaid LIVE —
+  //   an in-flight AI call (≤60s) promotes the row to 'predicting'. Computed per
+  //   reading BEFORE customer grouping so the hottest reading can represent its
+  //   customer card (overlay must precede grouping, else a live call hides).
+  const enriched = useMemo(() => {
+    return threads.map((t) => {
+      const base: ChatStage = t.stage ?? 'idle';
+      const rid = readingIdOf(t.id);
+      const w =
+        (rid != null ? inFlightIndex.byReading.get(rid) : undefined) ??
+        (t.psid ? inFlightIndex.byPsid.get(t.psid) : undefined);
+      const live = !!w && (w.age_seconds ?? 999) <= 60;
+      // Cancelled rows are terminal — a stale worker entry must not revive them.
+      const cancelled = base === 'cancelled_user' || base === 'cancelled_system';
+      const stage: ChatStage = live && !cancelled ? 'predicting' : base;
+      return { t, stage, worker: live && !cancelled ? w : undefined };
+    });
+  }, [threads, inFlightIndex]);
+
+  // 🧑‍🤝‍🧑 (2026-06-18) Collapse the many readings of one person into ONE card —
+  //   fixes the "same customer shows up as many cards" bug. Grouped by the stable,
+  //   channel-namespaced customerKey. The card REUSES the representative reading's
+  //   real "r-{id}" as its id so every reading-id-keyed path (deep-link, worker
+  //   match, approve, transcript, takeover, send) keeps working untouched.
+  //   Representative = hottest effective stage, then newest. Bill/approve fields
+  //   come from the group's OUTSTANDING reading (the hottest reading is often a
+  //   paid one that would otherwise mask an unpaid bill); LTV is summed across the
+  //   group so VIP reflects the whole customer, not a single reading.
+  const customers = useMemo(() => {
+    const groups = new Map<string, typeof enriched>();
+    for (const e of enriched) {
+      const arr = groups.get(e.t.customerKey);
+      if (arr) arr.push(e);
+      else groups.set(e.t.customerKey, [e]);
+    }
+    const out: {
+      t: ChatThread;
+      stage: ChatStage;
+      worker: WorkerCallRow | undefined;
+      approveId: string;
+      memberCount: number;
+    }[] = [];
+    for (const [key, members] of groups) {
+      const rep = members.reduce((a, b) => {
+        const pa = STAGE_META[a.stage].prio;
+        const pb = STAGE_META[b.stage].prio;
+        if (pa !== pb) return pa < pb ? a : b;
+        return (b.t.lastTsMs ?? 0) > (a.t.lastTsMs ?? 0) ? b : a;
+      });
+      // Outstanding bill anywhere in the group (most-recent first) — approve must
+      // target THIS reading, not the (possibly already-paid) representative.
+      const unpaid = members
+        .filter((m) => m.t.isPaid === false && m.t.due > 0)
+        .sort((a, b) => (b.t.lastTsMs ?? 0) - (a.t.lastTsMs ?? 0))[0];
+      const ltv = members.reduce((s, m) => s + (m.t.ltv || 0), 0);
+      const card: ChatThread = {
+        ...rep.t,
+        customerKey: key,
+        memberIds: members.map((m) => m.t.id),
+        ltv,
+        vip: ltv >= 5000 || rep.t.vip,
+        due: unpaid ? unpaid.t.due : 0,
+        isPaid: unpaid ? false : true,
+      };
+      out.push({
+        t: card,
+        stage: rep.stage,
+        worker: rep.worker,
+        approveId: unpaid?.t.id ?? rep.t.id,
+        memberCount: members.length,
+      });
+    }
+    return out;
+  }, [enriched]);
+
+  // Grid + sidebar order: hottest stage first, then most-recent activity.
+  const staged = useMemo(
+    () =>
+      [...customers].sort(
         (a, b) =>
           STAGE_META[a.stage].prio - STAGE_META[b.stage].prio ||
           (b.t.lastTsMs ?? 0) - (a.t.lastTsMs ?? 0),
-      );
-  }, [threads, inFlightIndex]);
+      ),
+    [customers],
+  );
 
+  // Sidebar list = the deduped customer cards (hot-first), then filtered.
+  const filtered = useMemo(
+    () =>
+      staged
+        .map((s) => s.t)
+        .filter((c) => {
+          if (channelFilter && c.channel !== channelFilter) return false;
+          // "มีแอดมิน" = ANY of the customer's readings is under admin takeover
+          //   (bot[id] === false), not just the volatile representative.
+          if (onlyAdmin && !(c.memberIds ?? [c.id]).some((id) => bot[id] === false)) return false;
+          if (filter && !c.name.toLowerCase().includes(filter.toLowerCase())) return false;
+          return true;
+        }),
+    [staged, filter, channelFilter, onlyAdmin, bot],
+  );
+
+  // Counts per stage over the deduped CUSTOMERS (not readings) — built from
+  //   STAGE_META so adding a stage can never desync the buckets.
   const stageCounts = useMemo(() => {
-    const c: Record<ChatStage, number> = {
-      predicting: 0, cancelled_user: 0, celtic: 0, deciding: 0, waiting: 0, cancelled_system: 0, idle: 0,
-    };
+    const c = {} as Record<ChatStage, number>;
+    for (const k of Object.keys(STAGE_META) as ChatStage[]) c[k] = 0;
     for (const s of staged) c[s.stage]++;
     return c;
   }, [staged]);
@@ -257,9 +333,11 @@ function ChatPageInner() {
     return { byProvider: out, overall: median(all) };
   }, [workersFeed.data]);
 
-  // Auto-surface flash — a thread that just ENTERED a hot stage (started
+  // Auto-surface flash — a customer that just ENTERED a hot stage (started
   // picking cards, AI started predicting, bill issued) pulses for a few
-  // seconds so the operator's eye lands on it without hunting.
+  // seconds so the operator's eye lands on it without hunting. Keyed by the
+  // STABLE customerKey, not the representative reading id (which churns as heat
+  // shifts) — so the crit toast fires exactly once per real customer transition.
   const prevStagesRef = useRef<Record<string, ChatStage>>({});
   const [flashIds, setFlashIds] = useState<Set<string>>(() => new Set());
   useEffect(() => {
@@ -268,12 +346,13 @@ function ChatPageInner() {
     const next: Record<string, ChatStage> = {};
     const newlyHot: string[] = [];
     for (const { t, stage } of staged) {
-      next[t.id] = stage;
-      if (stage !== prev[t.id] && stage !== 'idle') newlyHot.push(t.id);
+      const key = t.customerKey;
+      next[key] = stage;
+      if (stage !== prev[key] && stage !== 'idle') newlyHot.push(key);
       // 🚨 Customer just killed their own bill — revenue walking out the door.
       // Crit toast so the operator can chase immediately. Only on a REAL
-      // transition (thread was already tracked, not the initial snapshot).
-      if (!isFirstPass && prev[t.id] !== undefined && prev[t.id] !== 'cancelled_user' && stage === 'cancelled_user') {
+      // transition (customer was already tracked, not the initial snapshot).
+      if (!isFirstPass && prev[key] !== undefined && prev[key] !== 'cancelled_user' && stage === 'cancelled_user') {
         pushToast({
           kind: 'crit',
           title: '🚨 ลูกค้ายกเลิกบิลเอง — ' + t.name,
@@ -611,10 +690,13 @@ function ChatPageInner() {
         </div>
         <div className="overflow-y-auto flex-1 min-h-0">
           {filtered.map((c) => {
-            const isActive = c.id === activeId;
+            const isActive = c.customerKey === activeCustomerKey;
+            // Bot vs admin across ALL the customer's readings (stable), not the
+            //   representative reading id which churns as funnel heat shifts.
+            const customerBotActive = !(c.memberIds ?? [c.id]).some((id) => bot[id] === false);
             return (
               <button
-                key={c.id}
+                key={c.customerKey}
                 onClick={() => {
                   setActiveId(c.id);
                   setViewMode('single'); // เลือกมาแชท — drop out of the grid
@@ -631,7 +713,7 @@ function ChatPageInner() {
                 </div>
                 <div className="flex items-center gap-1 mb-0.5 flex-wrap">
                   {c.vip && <Pill tone="warn">VIP</Pill>}
-                  {bot[c.id] ? <Pill tone="ok">🤖</Pill> : c.takenBy && (
+                  {customerBotActive ? <Pill tone="ok">🤖</Pill> : c.takenBy && (
                     <Pill tone="info">
                       <span className="w-2.5 h-2.5 rounded-full" style={{ background: c.takenBy.color }} />
                       {c.takenBy.initial}
@@ -690,11 +772,12 @@ function ChatPageInner() {
               }
               return (
                 <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))' }}>
-                  {shown.map(({ t, stage, worker }) => (
+                  {shown.map(({ t, stage, worker, approveId, memberCount }) => (
                     <MultiTile
-                      key={t.id}
+                      key={t.customerKey}
                       thread={t}
                       stage={stage}
+                      memberCount={memberCount}
                       workerProvider={worker?.provider ?? null}
                       predict={
                         stage === 'predicting' && worker
@@ -707,14 +790,18 @@ function ChatPageInner() {
                             }
                           : null
                       }
-                      flash={flashIds.has(t.id)}
-                      // Cancelled bills are terminal COMPLETED rows — mark-paid
-                      // would set is_paid but skip the fortune-flow trigger
-                      // (idempotency guard), stranding the customer. Chat first.
+                      flash={flashIds.has(t.customerKey)}
+                      // Approve only when the customer has an OUTSTANDING bill
+                      // (t.isPaid/t.due reflect the group's unpaid reading, not
+                      // the maybe-paid representative). Cancelled bills are
+                      // terminal COMPLETED rows — mark-paid would set is_paid but
+                      // skip the fortune-flow trigger (idempotency guard),
+                      // stranding the customer. Chat first.
                       canApprove={
                         paired &&
                         t.isPaid === false &&
-                        readingIdOf(t.id) != null &&
+                        t.due > 0 &&
+                        readingIdOf(approveId) != null &&
                         stage !== 'cancelled_user' &&
                         stage !== 'cancelled_system'
                       }
@@ -723,7 +810,8 @@ function ChatPageInner() {
                         setViewMode('single');
                       }}
                       onApprove={() => {
-                        setActiveId(t.id);
+                        // Target the unpaid reading, not the representative.
+                        setActiveId(approveId);
                         setApproveOpen(true);
                       }}
                     />
@@ -1438,6 +1526,7 @@ function ActiveWorkerBadge({ w, live }: { w: WorkerCallRow; live: boolean }) {
 function MultiTile({
   thread: t,
   stage,
+  memberCount,
   workerProvider,
   predict,
   flash,
@@ -1447,6 +1536,8 @@ function MultiTile({
 }: {
   thread: ChatThread;
   stage: ChatStage;
+  /** How many readings this one customer card collapses (≥1). */
+  memberCount: number;
   workerProvider: string | null;
   /** Live prediction timing — age at fetch + when fetched + median ETA. */
   predict: { ageSec: number; fetchedAt: number; etaSec: number | null } | null;
@@ -1456,7 +1547,10 @@ function MultiTile({
   onApprove: () => void;
 }) {
   const meta = STAGE_META[stage];
-  const hot = stage !== 'idle' && stage !== 'cancelled_system';
+  // "Hot" = colored glow border. Cold/terminal stages stay flat so the eye is
+  // drawn only to customers that actually need attention.
+  const COLD: ChatStage[] = ['idle', 'delivered', 'declined', 'cancelled_system', 'intake'];
+  const hot = !COLD.includes(stage);
 
   // ⏱️ Realtime countdown while the AI is generating — ticks every second
   // between the 3s worker polls so the operator sees a live clock, not a
@@ -1501,6 +1595,14 @@ function MultiTile({
       <div className="flex items-center gap-1.5 min-w-0">
         <ChannelChip channel={t.channel === 'LINE' ? 'line' : 'fb'} />
         <span className="text-sm text-fg font-medium truncate flex-1">{t.name}</span>
+        {memberCount > 1 && (
+          <span
+            className="text-2xs mono text-mute shrink-0 px-1 rounded bg-rowhi border border-line"
+            title={`ลูกค้ารายนี้มี ${memberCount} ดวงในระบบ — รวมเป็นการ์ดเดียว`}
+          >
+            ×{memberCount}
+          </span>
+        )}
         {t.vip && <Pill tone="warn">VIP</Pill>}
         <span className="text-2xs mono text-mute shrink-0">{t.lastTs}</span>
       </div>

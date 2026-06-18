@@ -12,17 +12,26 @@ export type ChatMessage = {
   image_url?: string | null;
 };
 
-// 🔲 (2026-06-11) Funnel stage for the multi-view grid. Derived from the
-//   reading row (adapters/chat.ts) except 'predicting', which the chat page
-//   overlays live from the workers queue (an in-flight AI call right now).
+// 🔲 (2026-06-11, expanded 2026-06-18) Funnel stage for the multi-view grid.
+//   Derived from the reading row's conversation_status (adapters/chat.ts) so the
+//   grid mirrors the REAL Fortune Bot customer journey end-to-end, except
+//   'predicting', which the chat page overlays live from the workers queue (an
+//   in-flight AI call right now). Ordered loosely by operator heat — see
+//   STAGE_META.prio for the canonical ordering.
 export type ChatStage =
   | 'predicting'       // 🔮 AI กำลังทำนายอยู่ตอนนี้ (live worker call / celtic_generating)
   | 'cancelled_user'   // 🚨 ลูกค้ายกเลิกบิลเอง — รายได้หลุดมือ ต้องตามด่วน (CRITICAL)
-  | 'celtic'           // 🃏 อยู่ใน Celtic flow — เลือกไพ่/ตอบคำถาม (จ่ายแล้ว ยังไม่มีคำทำนาย)
-  | 'deciding'         // 💰 มีบิลค้าง — กำลังตัดสินใจชำระ
-  | 'waiting'          // ⏳ จ่ายแล้ว รอคำทำนายส่ง
+  | 'deciding'         // 💰 มีบิลค้าง/เลือกวิธีจ่าย — กำลังตัดสินใจชำระ
+  | 'celtic'           // 🃏 จ่ายแล้ว · เลือกไพ่/ตอบคำถาม (Celtic)
+  | 'waiting'          // ⏳ จ่ายแล้ว รอคำทำนายส่ง (อาจค้าง)
+  | 'upsell'           // 🎁 ดูดวงฟรีแล้ว · รอตัดสินใจซื้อ 39/99
+  | 'choosing'         // 🧭 เลือกแพ็กเกจ/คุยเก็บข้อมูล (tier/discovery — ยังไม่มีบิล)
+  | 'collecting'       // 📝 กำลังเก็บข้อมูลก่อนชำระ (วันเกิด/คำถาม/จั่วไพ่)
+  | 'intake'           // 💬 เริ่มสนทนาใหม่ / รอยืนยัน
+  | 'delivered'        // ✅ ส่งคำทำนายแล้ว · จบงาน
+  | 'declined'         // 🙅 ปฏิเสธ upsell · ส่งคำลาแล้ว
   | 'cancelled_system' // ❌ ระบบยกเลิกบิลให้ (หมดเวลา 30/90 นาที — cron)
-  | 'idle';            // คุยทั่วไป / จบแล้ว
+  | 'idle';            // 💤 อื่น ๆ (สถานะใหม่ที่ยังไม่ได้แมป — fallback)
 
 export type ChatThread = {
   id: string;
@@ -30,6 +39,15 @@ export type ChatThread = {
   channel: Channel;
   psid: string;
   userId?: number | null;
+  // 🧑‍🤝‍🧑 (2026-06-18) Stable per-CUSTOMER identity used to collapse the many
+  //   readings of one person into a single multi-view card. Channel-namespaced
+  //   so an FB PSID and a LINE userId that share a value never merge two people.
+  //   See readingToChatThread + the `customers` grouping in chat/page.tsx.
+  customerKey: string;
+  // 🧑‍🤝‍🧑 (2026-06-18) Only set on a deduped CUSTOMER card (grid/sidebar): the
+  //   r-{id}s of every reading collapsed into it. Lets bot/takeover state be read
+  //   across the whole customer instead of the volatile representative reading.
+  memberIds?: string[];
   openedAt: string;
   // 🔲 (2026-06-11) Multi-view: funnel stage + epoch ms of last activity
   //   (lastTs is a display string — useless for ordering).
