@@ -1,5 +1,6 @@
 import type { Followup, FollowupStatus, Channel } from '@/lib/mock/types';
 import type { FortuneReading } from '@/lib/api';
+import { inferReadingChannel } from './channel';
 
 /**
  * Map a FortuneReading row → Followup card.
@@ -16,7 +17,7 @@ import type { FortuneReading } from '@/lib/api';
  *   - await_payment → from responded_at (last bot push) or created_at
  */
 export function readingToFollowup(r: FortuneReading): Followup {
-  const channel: Channel = inferChannel(r);
+  const channel: Channel = inferReadingChannel(r);
   const name = r.facebook_user_name ?? r.user?.name ?? `(ลูกค้า ${r.id})`;
   const service = inferServiceLabel(r);
   const amount = Number(r.amount_paid ?? 0) || guessAmountFromService(service);
@@ -67,16 +68,6 @@ export function needsFollowup(r: FortuneReading): boolean {
   const delivered = !!r.responded_at && !!(r.ai_response ?? '').toString().trim();
   if (paid && delivered) return false;
   return true;
-}
-
-function inferChannel(r: FortuneReading): Channel {
-  // FortuneReading carries facebook_user_id when the message came from FB.
-  // No explicit LINE flag on the reading row itself, so default FB unless
-  // the user record clearly says LINE via the email prefix.
-  const e = (r.user?.email ?? '').toLowerCase();
-  if (e.startsWith('line_')) return 'LINE';
-  if (r.facebook_user_id) return 'FB';
-  return 'FB';
 }
 
 function inferServiceLabel(r: FortuneReading): string {

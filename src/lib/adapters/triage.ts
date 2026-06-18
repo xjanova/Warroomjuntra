@@ -1,6 +1,7 @@
 import type { TriageCase, Severity, CaseType, Channel } from '@/lib/mock/types';
 import type { FortuneReading } from '@/lib/api';
 import type { SlaThresholds } from '@/lib/stores/settings';
+import { inferReadingChannel } from './channel';
 
 /**
  * Map a thaiprompt FortuneReading → warroom TriageCase view model.
@@ -29,8 +30,8 @@ export function readingToTriageCase(r: FortuneReading, sla: SlaThresholds): Tria
   if (remainingSec < 0) severity = 'crit';
   else if (slaPct >= 70) severity = 'warn';
 
-  // Channel heuristic — readings born from FB Messenger bot have facebook_user_id set
-  const channel: Channel = r.facebook_user_id ? 'FB' : 'LINE';
+  // Channel — authoritative email-prefix detection (see ./channel).
+  const channel: Channel = inferReadingChannel(r);
 
   const customer = r.user?.name || r.facebook_user_name || `#${r.id}`;
   const questionPreview = previewQuestion(r.questions);

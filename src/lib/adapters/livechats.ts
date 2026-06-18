@@ -1,5 +1,6 @@
 import type { Chat } from '@/lib/mock/types';
 import type { FortuneReading } from '@/lib/api';
+import { inferReadingChannel } from './channel';
 
 /**
  * Map a thaiprompt FortuneReading → warroom Chat card for the LiveChats panel.
@@ -11,8 +12,7 @@ export function readingToChat(r: FortuneReading): Chat {
   const lastTs = r.responded_at ?? r.created_at;
   const silentSec = lastTs ? Math.max(0, Math.floor((Date.now() - new Date(lastTs).getTime()) / 1000)) : 0;
 
-  const fromFB = !!r.facebook_user_id;
-  const channel = fromFB ? 'FB' : 'LINE';
+  const channel = inferReadingChannel(r);
   const name = r.user?.name || r.facebook_user_name || `#${r.id}`;
 
   // Bot vs human owner heuristic: response_type === 'admin' means a human took over.

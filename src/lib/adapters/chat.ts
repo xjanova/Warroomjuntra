@@ -1,5 +1,6 @@
 import type { ChatThread, ChatMessage, ChatStage } from '@/lib/mock/chat-page';
 import type { FortuneReading } from '@/lib/api';
+import { inferReadingChannel, extractReadingPsid } from './channel';
 
 // ── 🔲 Funnel stages (multi-view) ────────────────────────────────────────────
 
@@ -78,8 +79,8 @@ export function stageOfReading(r: FortuneReading): ChatStage {
  */
 export function readingToChatThread(r: FortuneReading): ChatThread {
   const customer = r.user?.name || r.facebook_user_name || `#${r.id}`;
-  const psid = r.facebook_user_id || (r.user?.id ? `U-${r.user.id}` : `id-${r.id}`);
-  const channel = r.facebook_user_id ? 'FB' : 'LINE';
+  const psid = extractReadingPsid(r) ?? (r.user?.id ? `U-${r.user.id}` : `id-${r.id}`);
+  const channel = inferReadingChannel(r);
   const openedAt = formatTime(r.created_at);
   const lastTs = formatTime(r.responded_at ?? r.created_at);
   const bot = r.response_type !== 'admin';
