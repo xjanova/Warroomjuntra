@@ -52,6 +52,10 @@ export type ChatThread = {
   // 🔲 (2026-06-11) Multi-view: funnel stage + epoch ms of last activity
   //   (lastTs is a display string — useless for ordering).
   stage?: ChatStage;
+  // 🔍 (2026-06-19) Fine-grained "what are they doing now" label shown on the
+  //   card (e.g. "เปิดไพ่ 7/10", "เปิดไพ่ครบ · รอวันเกิด"). undefined → use the
+  //   coarse STAGE_META label.
+  stageDetail?: string;
   lastTsMs?: number;
   bot: boolean;
   takenBy?: { initial: string; color: string };

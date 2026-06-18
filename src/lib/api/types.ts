@@ -69,6 +69,12 @@ export type FortuneReading = {
   user?: { id: number; name: string; email?: string };
   facebook_user_name: string | null;
   facebook_user_id: string | null;
+  // 🪪 (2026-06-19) Canonical platform identity from the backend resource.
+  //   `platform` is authoritative for FB-vs-LINE; `platform_user_id` is the only
+  //   stable user id for LINE (facebook_user_id is null there). Optional — absent
+  //   on older backend deploys, so the frontend falls back to email heuristics.
+  platform?: 'facebook' | 'line' | string | null;
+  platform_user_id?: string | null;
   questions: string[] | string | null;
   categories: string[] | string | null;
   reading_type: 'basic' | 'deep' | string;
@@ -92,6 +98,12 @@ export type FortuneReading = {
     label: string | null;
     cancelled_at?: Iso8601 | null;
   } | null;
+  // 🔮 (2026-06-19) Fine Celtic-99 sub-state (lives in conversation_state, not
+  //   conversation_status) so the funnel can show "เปิดไพ่ X/10 · รับวันเกิด".
+  //   Optional — absent on older backend deploys.
+  celtic_picked_count?: number | null;
+  celtic_birthdate_pending?: boolean | null;
+  celtic_questions_used?: number | null;
   ai: {
     provider: string | null;
     model: string | null;

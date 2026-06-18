@@ -24,6 +24,12 @@ export const STAGE_META: Record<ChatStage, { label: string; icon: string; prio: 
   idle:             { label: 'อื่น ๆ', icon: '💤', prio: 12, color: '#6b7280' },
 };
 
+/** Cold / inactive stages: a finished or dormant conversation. These cards stay
+ *  flat — no glow border, no auto-surface flash — so the operator's eye is drawn
+ *  only to customers who actually need attention. (cancelled_user is NOT here: a
+ *  customer killing their own bill is a hot revenue-loss alert.) */
+export const COLD_STAGES: ChatStage[] = ['delivered', 'declined', 'cancelled_system', 'idle'];
+
 // conversation_status → stage. Verified 1:1 against the backend state machine
 // (Thaiprompt-Affiliate app/Models/FortuneReading.php STATUS_* constants). Every
 // known status maps explicitly; only a NEW/unknown backend status falls through
@@ -103,6 +109,52 @@ export function stageOfReading(r: FortuneReading): ChatStage {
 }
 
 /**
+ * Fine-grained "what is this customer doing RIGHT NOW" label for a card —
+ * surfaces the sub-state that conversation_status alone can't express (Celtic
+ * card-pick progress, the post-cards birthdate collection, Q&A counters,
+ * pre-payment steps). Returns undefined when the coarse stage label is enough.
+ * Uses the optional celtic_* fields from the backend resource (2026-06-19);
+ * degrades gracefully when they're absent on older deploys.
+ */
+export function stageDetailOf(r: FortuneReading): string | undefined {
+  if (r.cancellation) return undefined; // pinReason already says why
+  const cs = (r.conversation_status ?? '').toLowerCase();
+  const picked = r.celtic_picked_count ?? null;
+  const usedQ = r.celtic_questions_used ?? 0;
+  switch (cs) {
+    case 'celtic_picking':
+      return picked != null ? `เปิดไพ่ ${picked}/10` : 'กำลังเปิดไพ่';
+    case 'celtic_awaiting_question':
+      if (r.celtic_birthdate_pending) return 'เปิดไพ่ครบ · รอวันเกิด 🎂';
+      return usedQ > 0 ? `ถามไป ${usedQ} · รอคำถามต่อ` : 'เปิดไพ่ครบ · รอคำถามแรก';
+    case 'celtic_generating':
+      return `กำลังตอบคำถามที่ ${usedQ + 1}`;
+    case 'celtic_qa_prompt':
+      return usedQ > 0 ? `ตอบไป ${usedQ} คำถาม · ถามต่อไหม` : 'ถามต่อไหม';
+    case 'celtic_pending_payment':
+      return 'รอจ่าย 99 (Celtic)';
+    case 'pending_payment':
+      return 'รอจ่าย 39 (Deep)';
+    case 'awaiting_payment_method':
+      return 'เลือกวิธีจ่าย (QR/บัตร)';
+    case 'pending_stripe_payment':
+      return 'รอจ่ายผ่านบัตร (Stripe)';
+    case 'collecting_birthdate':
+      return 'กำลังขอวันเกิด';
+    case 'collecting_questions':
+      return 'กำลังขอคำถาม';
+    case 'collecting_tarot':
+      return 'จั่วไพ่ก่อนจ่าย';
+    case 'tier_choice':
+      return 'กำลังเลือก 39/99';
+    case 'free_predicted':
+      return 'ดูฟรีแล้ว · รอตัดสินใจซื้อ';
+    default:
+      return undefined;
+  }
+}
+
+/**
  * Synthesize a ChatThread from a FortuneReading.
  *
  * The reading endpoint doesn't return a full message history yet — we
@@ -117,13 +169,22 @@ export function stageOfReading(r: FortuneReading): ChatStage {
  */
 export function readingToChatThread(r: FortuneReading): ChatThread {
   const customer = r.user?.name || r.facebook_user_name || `#${r.id}`;
-  const psid = extractReadingPsid(r) ?? (r.user?.id ? `U-${r.user.id}` : `id-${r.id}`);
   const channel = inferReadingChannel(r);
-  // 🧑‍🤝‍🧑 Stable per-customer key for multi-view dedup. A logged-in web account
-  //   (userId) is the strongest identity; else the platform user id, namespaced
-  //   by channel so an FB PSID and a LINE userId of the same value can't merge.
-  //   Anonymous rows fall back to a per-reading psid (id-{id}) → never merge.
-  const customerKey = r.user?.id ? `u:${r.user.id}` : `${channel}:${psid}`;
+  // The REAL platform user id (FB PSID / LINE userId) when resolvable — now
+  //   reliable for LINE too via platform_user_id. Falls back to an internal id
+  //   for display/ban only when no platform identity exists.
+  const platformId = extractReadingPsid(r);
+  const psid = platformId ?? (r.user?.id ? `U-${r.user.id}` : `id-${r.id}`);
+  // 🧑‍🤝‍🧑 Stable per-customer key for multi-view dedup. Prefer the platform
+  //   identity (present on EVERY bot reading incl. LINE — the field that fixes
+  //   the duplicate-card bug), namespaced by channel so an FB PSID and a LINE
+  //   userId of the same value can't merge. Else a web userId; else per-reading
+  //   (never merges — correct when identity is genuinely unknown).
+  const customerKey = platformId
+    ? `${channel}:${platformId}`
+    : r.user?.id
+    ? `u:${r.user.id}`
+    : `r:${r.id}`;
   const openedAt = formatTime(r.created_at);
   const lastTs = formatTime(r.responded_at ?? r.created_at);
   const bot = r.response_type !== 'admin';
@@ -151,6 +212,7 @@ export function readingToChatThread(r: FortuneReading): ChatThread {
     customerKey,
     openedAt,
     stage: stageOfReading(r),
+    stageDetail: stageDetailOf(r),
     lastTsMs: parseMs(r.responded_at) ?? parseMs(r.paid_at) ?? parseMs(r.created_at) ?? 0,
     bot,
     sentiment,
@@ -223,7 +285,11 @@ function buildMessages(r: FortuneReading): ChatMessage[] {
       ai: !isAdmin ? r.ai?.provider ?? undefined : undefined,
       text: r.ai_response,
     });
-  } else if (!r.responded_at) {
+  } else if (r.is_paid && !r.responded_at) {
+    // Only a PAID reading is genuinely awaiting a prediction. An unpaid row with
+    // no response is just an ongoing chat — don't push a system line so the card
+    // preview falls back to the customer's actual question, not a false
+    // "รอคำทำนาย" (the customer hasn't paid, so no prediction is owed).
     out.push({
       id: id++,
       role: 'system',

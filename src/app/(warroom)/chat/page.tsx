@@ -11,7 +11,7 @@ import { Kbd } from '@/components/ui/Kbd';
 import { useWarroom } from '@/lib/stores/warroom';
 import { useFortuneFeed, sendChatMessage, suggestChatReply, fetchReadingTranscript, fetchFortuneWorkersQueue, fetchBanStatus, banUser, unbanUser, markReadingPaid, fetchUserReadings, takeoverChat, resumeChatBot, fetchChatTakeoverStatus, useAdminData, describeError, type ReadingTranscriptMessage, type FortuneWorkersQueue, type WorkerCallRow, type BanStatusResponse } from '@/lib/api';
 import { useSettings, isPaired as isPairedFn } from '@/lib/stores/settings';
-import { readingToChatThread, STAGE_META } from '@/lib/adapters/chat';
+import { readingToChatThread, STAGE_META, COLD_STAGES } from '@/lib/adapters/chat';
 import { CreditModal } from '@/components/warroom/CreditModal';
 import { cn } from '@/lib/utils';
 
@@ -348,7 +348,9 @@ function ChatPageInner() {
     for (const { t, stage } of staged) {
       const key = t.customerKey;
       next[key] = stage;
-      if (stage !== prev[key] && stage !== 'idle') newlyHot.push(key);
+      // Only flash on entering a genuinely HOT stage. Cold/finished cards
+      // (delivered/declined/cancelled_system/idle) never pulse — they're done.
+      if (stage !== prev[key] && !COLD_STAGES.includes(stage)) newlyHot.push(key);
       // 🚨 Customer just killed their own bill — revenue walking out the door.
       // Crit toast so the operator can chase immediately. Only on a REAL
       // transition (customer was already tracked, not the initial snapshot).
@@ -1547,10 +1549,9 @@ function MultiTile({
   onApprove: () => void;
 }) {
   const meta = STAGE_META[stage];
-  // "Hot" = colored glow border. Cold/terminal stages stay flat so the eye is
-  // drawn only to customers that actually need attention.
-  const COLD: ChatStage[] = ['idle', 'delivered', 'declined', 'cancelled_system', 'intake'];
-  const hot = !COLD.includes(stage);
+  // "Hot" = colored glow border. Cold/finished stages stay flat (no glow, no
+  // flash) so the eye is drawn only to customers that actually need attention.
+  const hot = !COLD_STAGES.includes(stage);
 
   // ⏱️ Realtime countdown while the AI is generating — ticks every second
   // between the 3s worker polls so the operator sees a live clock, not a
@@ -1619,7 +1620,9 @@ function MultiTile({
           <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: meta.color, boxShadow: `0 0 4px ${meta.color}` }} />
         )}
         <span className="font-semibold">
-          {meta.icon} {meta.label}
+          {/* Prefer the fine-grained "what they're doing now" detail
+              (เปิดไพ่ 7/10 · รอวันเกิด …) over the coarse stage label. */}
+          {meta.icon} {t.stageDetail ?? meta.label}
           {stage === 'predicting' && workerProvider ? ` · ${workerProvider}` : ''}
         </span>
         {timeText && <span className="mono opacity-90">· {timeText}</span>}
