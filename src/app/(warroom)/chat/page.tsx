@@ -135,12 +135,12 @@ function ChatPageInner() {
   //   switching back doesn't lose history. intervalOverride=0 + pause when
   //   not paired / not a real reading so the timer doesn't burn API calls.
   const activeReadingId = readingIdOf(activeId);
-  const transcriptFeed = useAdminData<{ messages: ReadingTranscriptMessage[] } | null>({
+  const transcriptFeed = useAdminData<{ messages: ReadingTranscriptMessage[]; source?: string } | null>({
     key: activeReadingId ? `transcript-${activeReadingId}` : 'transcript-none',
     fetcher: async () => {
       if (!activeReadingId) return null;
       const r = await fetchReadingTranscript(activeReadingId);
-      return { messages: r.messages ?? [] };
+      return { messages: r.messages ?? [], source: r.source };
     },
     mock: null,
     intervalOverride: activeReadingId ? 3 : 0,
@@ -148,6 +148,10 @@ function ChatPageInner() {
   });
   const transcriptLoading = transcriptFeed.isLoading && !transcriptFeed.data ? activeReadingId : null;
   const transcriptMessages = transcriptFeed.data?.messages ?? null;
+  // 'redis' = live verbatim Messenger log (today); 'structured' = reconstructed
+  //   from cards/Q&A (older readings). Surfaced as a small badge so the operator
+  //   knows whether they're seeing the realtime conversation.
+  const transcriptSource = transcriptFeed.data?.source ?? null;
 
   // active resolves against the FULL per-reading `threads` (NOT the deduped
   //   customer list) so a representative-reading change between polls can never
@@ -835,6 +839,11 @@ function ChatPageInner() {
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-sm font-semibold text-fg">{active.name}</span>
                   <ChannelChip channel={active.channel === 'LINE' ? 'line' : 'fb'} />
+                  {/* Realtime (verbatim Messenger log) vs reconstructed transcript */}
+                  {transcriptSource === 'redis' && (
+                    <Pill tone="ok"><span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse mr-1" />สด</Pill>
+                  )}
+                  {transcriptSource === 'structured' && <Pill tone="dim">สร้างใหม่</Pill>}
                   {active.vip && <Pill tone="warn">VIP</Pill>}
                   <Pill tone="mystic">{active.rarity}</Pill>
                   {activeWorker && <ActiveWorkerBadge w={activeWorker} live={workerIsLive} />}

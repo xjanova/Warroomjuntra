@@ -171,7 +171,7 @@ export type ReadingTranscriptMessage = {
 };
 
 export async function fetchReadingTranscript(id: string | number) {
-  return apiRequest<{ reading_id: number; messages: ReadingTranscriptMessage[]; generated_at: string }>({
+  return apiRequest<{ reading_id: number; messages: ReadingTranscriptMessage[]; source?: 'redis' | 'structured' | string; generated_at: string }>({
     path: `/fortune/readings/${id}/transcript`,
   });
 }
