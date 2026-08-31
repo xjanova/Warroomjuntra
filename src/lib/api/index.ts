@@ -134,7 +134,7 @@ export { pairConnection, verifyConnection, loginAndPair, verifyTwoFactorAndPair 
 export type { PairResult, LoginPairResult, PairUser } from './pair';
 export { useAdminData, invalidate, evict, refreshAll } from './useAdminData';
 export type { AdminDataResult, DataSource, UseAdminDataOptions } from './useAdminData';
-export { useFortuneFeed } from './useFortuneFeed';
+export { useFortuneFeed, FORTUNE_FEED_PAGE_SIZE } from './useFortuneFeed';
 export { useReadingDetail } from './useReadingDetail';
 export { useUserDetail } from './useUserDetail';
 export { getDeviceId, getDeviceName, setDeviceName, resetDeviceIdentity } from './device';

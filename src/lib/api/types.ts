@@ -77,7 +77,11 @@ export type FortuneReading = {
   platform_user_id?: string | null;
   questions: string[] | string | null;
   categories: string[] | string | null;
-  reading_type: 'basic' | 'deep' | string;
+  // 'basic' | 'deep' (เชิงลึก ฿39) | 'celtic_cross' (Celtic ฿99) — values verified against
+  //   Thaiprompt-Affiliate FortuneReading::READING_TYPE_*. NOTE: 'deep' is NOT
+  //   Celtic; the backend routes the post-payment flow off THIS column, not off
+  //   the amount an operator approves.
+  reading_type: 'basic' | 'deep' | 'celtic_cross' | string;
   ai_response: string | null;
   reading_image_url: string | null;
   // 📸 (2026-05-24) Customer-sent image — payment slip or fortune-question

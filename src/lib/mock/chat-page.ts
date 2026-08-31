@@ -38,6 +38,11 @@ export type ChatThread = {
   name: string;
   channel: Channel;
   psid: string;
+  // 🚫 (2026-08-31) The REAL platform user id (FB PSID / LINE userId), or null
+  //   when the reading has none. `psid` above may hold a synthetic
+  //   "U-{userId}" / "id-{readingId}" placeholder for display; those are not
+  //   addressable on FB/LINE, so ban / unban / ban-status MUST use this field.
+  platformId?: string | null;
   userId?: number | null;
   // 🧑‍🤝‍🧑 (2026-06-18) Stable per-CUSTOMER identity used to collapse the many
   //   readings of one person into a single multi-view card. Channel-namespaced
@@ -48,6 +53,10 @@ export type ChatThread = {
   //   r-{id}s of every reading collapsed into it. Lets bot/takeover state be read
   //   across the whole customer instead of the volatile representative reading.
   memberIds?: string[];
+  /** Raw reading_type ('basic' | 'deep' | 'celtic_cross'). The BACKEND picks the
+   *  post-payment flow from this column — not from the amount an operator
+   *  approves — so the approve modal states it instead of implying a choice. */
+  readingType?: string | null;
   openedAt: string;
   // 🔲 (2026-06-11) Multi-view: funnel stage + epoch ms of last activity
   //   (lastTs is a display string — useless for ordering).
@@ -59,7 +68,8 @@ export type ChatThread = {
   lastTsMs?: number;
   bot: boolean;
   takenBy?: { initial: string; color: string };
-  takenByName?: string;
+  /** Display time of the last admin reply (response_type==='admin'). NOT a
+   *  takeover timestamp — real takeover state comes from /chat/takeover-status. */
   takenAt?: string;
   takenAtMs?: number;
   sentiment: 'happy' | 'neutral' | 'angry';
@@ -83,11 +93,21 @@ export type ChatThread = {
   messages: ChatMessage[];
 };
 
+// 💬 One-click replies. RULE: a template must never assert a fact the operator
+//   has not checked — no account numbers, no balances, no delivery promises.
+//   Removed 2026-08-31, each for a concrete reason:
+//     • "ขอเลขท้ายบัตร 4 ตัวเพื่อยืนยัน" — the bot verifies payment by SLIP and
+//       bank SMS, never by card/ID digits. The template asked customers to type
+//       card numbers into a Messenger thread for a check nothing performs.
+//     • 'โอนเงินมาที่ KBANK xxx-2841 ชื่อ "ดูดวงแม่หมอบี"' — "xxx-2841" is a
+//       masked placeholder, not a usable account. One click sent a customer an
+//       account number they cannot transfer to.
+//     • "เครดิตของลูกค้ายังเหลืออยู่ค่ะ" — asserted a balance nobody had looked
+//       at. The chat sidebar now shows the real wallet balance; read it first.
 export const CHAT_TEMPLATES = [
-  'สวัสดีค่ะ ขอเลขท้ายบัตร 4 ตัวเพื่อยืนยันนะคะ',
+  'สวัสดีค่ะ รบกวนแจ้งชื่อผู้โอนและเวลาที่โอนหน่อยนะคะ เดี๋ยวตรวจสอบให้ทันทีค่ะ',
   'ขออภัยในความล่าช้า กำลังตรวจสอบให้ค่ะ',
-  'โอนเงินมาที่ KBANK xxx-2841 ชื่อ "ดูดวงแม่หมอบี"',
-  'เครดิตของลูกค้ายังเหลืออยู่ค่ะ ลองทักบอทใหม่ได้เลย',
+  'รบกวนส่งสลิปโอนเงินมาให้ดูหน่อยนะคะ 🙏',
   'ขออภัย ระบบขัดข้องเล็กน้อย แม่หมอกำลังตอบให้ค่ะ',
   'ยินดีค่ะ ขอบคุณที่ใช้บริการ 🙏',
 ];

@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { CHAT_TEMPLATES, CHAT_THREADS, type ChatThread, type ChatStage } from '@/lib/mock/chat-page';
@@ -9,10 +9,11 @@ import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { Switch } from '@/components/ui/Switch';
 import { Kbd } from '@/components/ui/Kbd';
 import { useWarroom } from '@/lib/stores/warroom';
-import { useFortuneFeed, sendChatMessage, suggestChatReply, fetchReadingTranscript, fetchFortuneWorkersQueue, fetchBanStatus, banUser, unbanUser, markReadingPaid, fetchUserReadings, takeoverChat, resumeChatBot, fetchChatTakeoverStatus, useAdminData, describeError, type ReadingTranscriptMessage, type FortuneWorkersQueue, type WorkerCallRow, type BanStatusResponse } from '@/lib/api';
+import { useFortuneFeed, FORTUNE_FEED_PAGE_SIZE, fetchWallets, sendChatMessage, suggestChatReply, fetchReadingTranscript, fetchFortuneWorkersQueue, fetchBanStatus, banUser, unbanUser, markReadingPaid, fetchUserReadings, takeoverChat, resumeChatBot, fetchChatTakeoverStatus, useAdminData, describeError, type ReadingTranscriptMessage, type FortuneWorkersQueue, type WorkerCallRow, type BanStatusResponse, type ChatTakeoverStatus } from '@/lib/api';
 import { useSettings, isPaired as isPairedFn } from '@/lib/stores/settings';
-import { readingToChatThread, STAGE_META, COLD_STAGES } from '@/lib/adapters/chat';
+import { readingToChatThread, STAGE_META, COLD_STAGES, rarityForLtv, levelForLtv } from '@/lib/adapters/chat';
 import { CreditModal } from '@/components/warroom/CreditModal';
+import { PROMPTPAY_RECEIVER } from '@/lib/payment/promptpay';
 import { cn } from '@/lib/utils';
 
 // Static-export builds require useSearchParams() to be inside a Suspense
@@ -66,8 +67,26 @@ function ChatPageInner() {
   const [activeId, setActiveId] = useState<string>(() =>
     resolveDeepThread(deepThreadParam, threads) ?? threads[0]?.id ?? '',
   );
-  const [bot, setBot] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(threads.map((c) => [c.id, c.bot])),
+  // 🤖 Who is driving each conversation. TWO layers, deliberately separate:
+  //   • heuristic — derived from the row (response_type!=='admin'). It only says
+  //     "an admin wrote the last reply"; a takeover with no reply yet still
+  //     reads as bot. Recomputed on every feed tick, which is fine — it is a
+  //     guess, not state.
+  //   • override — what the SERVER told us (/chat/takeover-status) or what the
+  //     operator just did. This must SURVIVE feed ticks.
+  //   The old code kept one map and rebuilt it wholesale from the heuristic
+  //   inside the threads effect, so a confirmed takeover was wiped within one
+  //   poll: the switch snapped back to "บอท" while the admin was still in
+  //   control, and clicking it again would hand the live customer back to the
+  //   bot mid-conversation.
+  const botHeuristic = useMemo(
+    () => Object.fromEntries(threads.map((c) => [c.id, c.bot])) as Record<string, boolean>,
+    [threads],
+  );
+  const [botOverride, setBotOverride] = useState<Record<string, boolean>>({});
+  const botOf = useCallback(
+    (id: string): boolean => botOverride[id] ?? botHeuristic[id] ?? true,
+    [botOverride, botHeuristic],
   );
   // The deep-link param we've already resolved (or given up on). null = not yet
   // resolved, so a fresh page load / external link keeps retrying until the live
@@ -75,8 +94,6 @@ function ChatPageInner() {
   // because the live list isn't in the very first (mock) render.
   const resolvedDeepParam = useRef<string | null>(null);
   useEffect(() => {
-    setBot(Object.fromEntries(threads.map((c) => [c.id, c.bot])));
-
     // Honor the deep-link until we actually land on its thread. Retries across
     // feed updates (live threads arrive asynchronously after mount).
     if (deepThreadParam && resolvedDeepParam.current !== deepThreadParam) {
@@ -170,7 +187,7 @@ function ChatPageInner() {
     const q = workersFeed.data;
     if (!q) return null;
     const rid = readingIdOf(active.id);
-    const psid = active.psid;
+    const psid = active.platformId; // never the synthetic display fallback
     const matches = (r: WorkerCallRow) => {
       // Defensive Number() cast — some Laravel serializers ship BIGINT as
       // string. We type as number|null but the wire format can drift.
@@ -211,7 +228,7 @@ function ChatPageInner() {
       const rid = readingIdOf(t.id);
       const w =
         (rid != null ? inFlightIndex.byReading.get(rid) : undefined) ??
-        (t.psid ? inFlightIndex.byPsid.get(t.psid) : undefined);
+        (t.platformId ? inFlightIndex.byPsid.get(t.platformId) : undefined);
       const live = !!w && (w.age_seconds ?? 999) <= 60;
       // Cancelled rows are terminal — a stale worker entry must not revive them.
       const cancelled = base === 'cancelled_user' || base === 'cancelled_system';
@@ -219,6 +236,28 @@ function ChatPageInner() {
       return { t, stage, worker: live && !cancelled ? w : undefined };
     });
   }, [threads, inFlightIndex]);
+
+  // Effective stage of the READING that is open in single view (worker overlay
+  //   included). The single-view header needs the per-reading stage, not the
+  //   customer card's representative stage — approve acts on this exact row.
+  const activeStage = useMemo(
+    () => enriched.find((e) => e.t.id === activeId)?.stage ?? null,
+    [enriched, activeId],
+  );
+
+  // 💸 A reading may be approved only when real money is owed on a LIVE bill.
+  //   Cancelled rows are excluded: the backend's post-payment trigger
+  //   short-circuits on conversation_status='completed' (which every cancelled
+  //   reading carries), so marking one paid records the money and delivers
+  //   nothing — while both the API message and our toast claim success.
+  const canApproveActive =
+    paired &&
+    !!active &&
+    active.isPaid === false &&
+    active.due > 0 &&
+    readingIdOf(active.id) != null &&
+    activeStage !== 'cancelled_user' &&
+    activeStage !== 'cancelled_system';
 
   // 🧑‍🤝‍🧑 (2026-06-18) Collapse the many readings of one person into ONE card —
   //   fixes the "same customer shows up as many cards" bug. Grouped by the stable,
@@ -240,8 +279,15 @@ function ChatPageInner() {
       t: ChatThread;
       stage: ChatStage;
       worker: WorkerCallRow | undefined;
-      approveId: string;
+      /** The reading an operator may safely mark paid, or null when none is.
+       *  Never a cancelled row — see the filter below. */
+      approveId: string | null;
       memberCount: number;
+      /** Everything this customer still owes across the feed, and how many bills
+       *  that is. `t.due` is deliberately the single bill approve would act on —
+       *  these two are the honest per-customer totals for the sidebar. */
+      dueTotal: number;
+      unpaidCount: number;
     }[] = [];
     for (const [key, members] of groups) {
       const rep = members.reduce((a, b) => {
@@ -252,29 +298,66 @@ function ChatPageInner() {
       });
       // Outstanding bill anywhere in the group (most-recent first) — approve must
       // target THIS reading, not the (possibly already-paid) representative.
-      const unpaid = members
-        .filter((m) => m.t.isPaid === false && m.t.due > 0)
-        .sort((a, b) => (b.t.lastTsMs ?? 0) - (a.t.lastTsMs ?? 0))[0];
+      const byRecency = (a: (typeof members)[number], b: (typeof members)[number]) =>
+        (b.t.lastTsMs ?? 0) - (a.t.lastTsMs ?? 0);
+      const unpaid = members.filter((m) => m.t.isPaid === false && m.t.due > 0).sort(byRecency)[0];
+      // 💸 APPROVABLE is stricter than UNPAID: a cancelled row still carries an
+      //   unpaid amount (that is the "หลุดมือ" figure we intentionally keep showing),
+      //   but marking it paid is a trap — the backend flips is_paid and then SKIPS
+      //   the delivery trigger because a cancelled reading sits at
+      //   conversation_status='completed'. Money recorded, nothing sent.
+      //   Guarding only on the REPRESENTATIVE's stage was not enough: a customer
+      //   with a hot live reading plus a cancelled bill passed that test and
+      //   pointed approve straight at the cancelled row.
+      const approvable = members
+        .filter(
+          (m) =>
+            m.t.isPaid === false &&
+            m.t.due > 0 &&
+            m.stage !== 'cancelled_user' &&
+            m.stage !== 'cancelled_system',
+        )
+        .sort(byRecency)[0];
       const ltv = members.reduce((s, m) => s + (m.t.ltv || 0), 0);
       const card: ChatThread = {
         ...rep.t,
         customerKey: key,
         memberIds: members.map((m) => m.t.id),
         ltv,
-        vip: ltv >= 5000 || rep.t.vip,
+        // Recomputed from the GROUP total — spreading the representative's
+        //   per-reading rarity/level next to a summed LTV made the two disagree.
+        rarity: rarityForLtv(ltv),
+        level: levelForLtv(ltv),
+        vip: ltv >= 5000,
         due: unpaid ? unpaid.t.due : 0,
-        isPaid: unpaid ? false : true,
+        // Only claim "settled" when there is genuinely no outstanding bill; fall
+        //   back to the representative's own flag rather than asserting true for
+        //   a customer who simply has no bill yet (intake / free readings).
+        isPaid: unpaid ? false : rep.t.isPaid,
       };
+      const outstanding = members.filter((m) => m.t.isPaid === false && m.t.due > 0);
       out.push({
         t: card,
         stage: rep.stage,
         worker: rep.worker,
-        approveId: unpaid?.t.id ?? rep.t.id,
+        approveId: approvable?.t.id ?? null,
         memberCount: members.length,
+        dueTotal: outstanding.reduce((acc, m) => acc + (m.t.due || 0), 0),
+        unpaidCount: outstanding.length,
       });
     }
     return out;
   }, [enriched]);
+
+  // Aggregate for the person whose chat is open. The single view read money off
+  //   the RAW per-reading thread while labelling it per-customer ("LTV รวม",
+  //   "ค้างจ่าย"), so the same person could read ฿39 here and ฿1,200 on their
+  //   card in the grid. Display-only: activeId still resolves against `threads`,
+  //   so the open chat can never jump when the representative changes.
+  const activeCustomer = useMemo(
+    () => customers.find((c) => c.t.customerKey === activeCustomerKey) ?? null,
+    [customers, activeCustomerKey],
+  );
 
   // Grid + sidebar order: hottest stage first, then most-recent activity.
   const staged = useMemo(
@@ -296,11 +379,11 @@ function ChatPageInner() {
           if (channelFilter && c.channel !== channelFilter) return false;
           // "มีแอดมิน" = ANY of the customer's readings is under admin takeover
           //   (bot[id] === false), not just the volatile representative.
-          if (onlyAdmin && !(c.memberIds ?? [c.id]).some((id) => bot[id] === false)) return false;
+          if (onlyAdmin && !(c.memberIds ?? [c.id]).some((id) => botOf(id) === false)) return false;
           if (filter && !c.name.toLowerCase().includes(filter.toLowerCase())) return false;
           return true;
         }),
-    [staged, filter, channelFilter, onlyAdmin, bot],
+    [staged, filter, channelFilter, onlyAdmin, botOf],
   );
 
   // Counts per stage over the deduped CUSTOMERS (not readings) — built from
@@ -362,7 +445,7 @@ function ChatPageInner() {
         pushToast({
           kind: 'crit',
           title: '🚨 ลูกค้ายกเลิกบิลเอง — ' + t.name,
-          body: (t.due > 0 ? `บิล ฿${t.due.toLocaleString()} หลุดมือ · ` : '') + 'กดเปิดแชทใน มัลติวิว เพื่อตามกลับ',
+          body: (t.due > 0 ? `บิล ${thb(t.due)} หลุดมือ · ` : '') + 'กดเปิดแชทใน มัลติวิว เพื่อตามกลับ',
         });
       }
     }
@@ -422,47 +505,106 @@ function ChatPageInner() {
     };
   }, [paired, activeUserId]);
 
+  // 💳 Real wallet balance for the open customer. The sidebar printed a
+  //   hardcoded 0 for EVERYONE (the reading resource carries no balance), which
+  //   reads as "this customer is out of credit" — a number an operator acts on.
+  //   Bot-only customers genuinely have no wallet; say that instead of "0".
+  const [credit, setCredit] = useState<{
+    status: 'loading' | 'ready' | 'none' | 'error';
+    balance: number | null;
+  }>({ status: 'none', balance: null });
+  // Switching customers fast can land an older wallet response after a newer
+  //   one — showing someone else's balance under this customer's name. Stamp
+  //   each request and ignore anything that isn't the latest.
+  const creditReq = useRef(0);
+  const refreshCredit = useCallback(() => {
+    const token = ++creditReq.current;
+    if (!paired || !activeUserId) {
+      setCredit({ status: 'none', balance: null });
+      return;
+    }
+    setCredit({ status: 'loading', balance: null });
+    fetchWallets({ user_id: activeUserId, per_page: 1 })
+      .then((res) => {
+        if (token !== creditReq.current) return;
+        const w = (res.data ?? [])[0] ?? null;
+        setCredit(w ? { status: 'ready', balance: w.balance } : { status: 'none', balance: null });
+      })
+      .catch(() => {
+        if (token === creditReq.current) setCredit({ status: 'error', balance: null });
+      });
+  }, [paired, activeUserId]);
+  useEffect(() => {
+    refreshCredit();
+  }, [refreshCredit]);
+
   // 🎮 (2026-06-04) Bot ⇄ admin takeover for the active thread, backed by the
   //   real FortuneTakeoverService via /chat/takeover|resume|takeover-status.
   //   Seeds the toggle from the server (overrides the response_type heuristic).
   const [takeoverBusy, setTakeoverBusy] = useState(false);
+  // Server truth for the OPEN thread, kept whole (not just the boolean) so the
+  //   header can state it honestly: a takeover is TIME-BOXED and the bot resumes
+  //   by itself when it lapses. Re-polled every 20s so an expired takeover stops
+  //   claiming the admin is still in control.
+  const [takeover, setTakeover] = useState<ChatTakeoverStatus | null>(null);
+  const activeIdForTakeover = active?.id ?? '';
   useEffect(() => {
-    if (!paired || !active) return;
-    const rid = readingIdOf(active.id);
+    setTakeover(null);
+    if (!paired) return;
+    const rid = readingIdOf(activeIdForTakeover);
     if (rid == null) return;
     let cancelled = false;
-    fetchChatTakeoverStatus(rid)
-      .then((res) => {
-        if (!cancelled) setBot((s) => ({ ...s, [active.id]: !res.is_takeover }));
-      })
-      .catch(() => {
-        /* keep heuristic default on error */
-      });
+    const pull = () =>
+      fetchChatTakeoverStatus(rid)
+        .then((res) => {
+          if (cancelled) return;
+          setTakeover(res);
+          setBotOverride((sx) => ({ ...sx, [activeIdForTakeover]: !res.is_takeover }));
+        })
+        .catch(() => {
+          /* keep the heuristic on error — never invent a state */
+        });
+    void pull();
+    const timer = setInterval(() => void pull(), 20000);
     return () => {
       cancelled = true;
+      clearInterval(timer);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paired, active?.id]);
+  }, [paired, activeIdForTakeover]);
 
   // v === true → hand back to the bot (resume); v === false → admin takes over.
   // Optimistic with rollback so a failed round-trip never leaves a ghost state.
   const setBotForThread = async (threadId: string, v: boolean) => {
-    const prev = bot[threadId];
-    setBot((s) => ({ ...s, [threadId]: v }));
+    // Guard BEFORE the optimistic write. Previously the early-return on
+    //   takeoverBusy fired after it, so a double-click left the switch showing a
+    //   flip that was never sent and never rolled back.
+    if (takeoverBusy) return;
+    const hadPrev = threadId in botOverride;
+    const prev = botOverride[threadId];
+    setBotOverride((sx) => ({ ...sx, [threadId]: v }));
     const rid = readingIdOf(threadId);
     if (!paired || rid == null) return; // mock / no real reading — local only
-    if (takeoverBusy) return;
     setTakeoverBusy(true);
     try {
       if (v) {
-        await resumeChatBot(rid);
+        const res = await resumeChatBot(rid);
+        if (threadId === activeIdForTakeover) setTakeover(res);
         pushToast({ kind: 'ok', title: 'คืนงานให้บอทแล้ว', body: active?.name });
       } else {
         const res = await takeoverChat(rid);
+        if (threadId === activeIdForTakeover) setTakeover(res);
         pushToast({ kind: 'info', title: 'รับช่วงต่อจากบอท', body: `${active?.name ?? ''} · บอทหยุด ${res.remaining_minutes} นาที` });
       }
     } catch (e) {
-      setBot((s) => ({ ...s, [threadId]: prev })); // rollback
+      // Roll back to the EXACT prior state — including "no override at all", so
+      //   a failed call falls back to the row heuristic instead of pinning a
+      //   value the server never confirmed.
+      setBotOverride((sx) => {
+        const n = { ...sx };
+        if (hadPrev) n[threadId] = prev;
+        else delete n[threadId];
+        return n;
+      });
       pushToast({ kind: 'crit', title: 'สลับบอท/แอดมินไม่สำเร็จ', body: describeError(e) });
     } finally {
       setTakeoverBusy(false);
@@ -480,12 +622,18 @@ function ChatPageInner() {
   // Callers are already responsible for checking `paired` — keeping the
   // gate here would silently no-op a manual unban if paired hasn't been
   // recomputed yet (race with settings hydration).
+  // 🚫 Ban / unban / ban-status address the customer on FB or LINE, so they must
+  //   key off the REAL platform id. `psid` falls back to a synthetic
+  //   "U-{userId}" / "id-{readingId}" when a reading has no platform identity;
+  //   sending that to the ban API writes a record that matches no live user — the
+  //   operator sees "แบนแล้ว" while the bot keeps answering the customer.
   const refreshBanStatus = async (thread: ChatThread | undefined) => {
-    if (!thread?.psid) return;
+    const pid = thread?.platformId;
+    if (!pid) return;
     const platform: 'facebook' | 'line' = thread.channel === 'LINE' ? 'line' : 'facebook';
     try {
-      const res = await fetchBanStatus(platform, thread.psid);
-      setBanStatus((m) => ({ ...m, [thread.psid]: res }));
+      const res = await fetchBanStatus(platform, pid);
+      setBanStatus((m) => ({ ...m, [pid]: res }));
     } catch {
       // 401/network — silently keep the previous value
     }
@@ -493,27 +641,39 @@ function ChatPageInner() {
 
   useEffect(() => {
     if (!paired) return;
-    if (!active?.psid) return;
-    if (banStatus[active.psid] !== undefined) return; // already fetched
+    if (!active?.platformId) return;
+    if (banStatus[active.platformId] !== undefined) return; // already fetched
     void refreshBanStatus(active);
     // refreshBanStatus is stable enough (pure inputs + state setter)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active?.psid, paired]);
+  }, [active?.platformId, paired]);
 
-  const currentBan = active?.psid ? banStatus[active.psid] ?? null : null;
+  const currentBan = active?.platformId ? banStatus[active.platformId] ?? null : null;
 
-  // 💸 (2026-05-24) Quick-approve modal — operator marks an unpaid reading
-  //   as paid (39฿ Deep / 99฿ Celtic) which kicks off the fortune-telling
-  //   flow on the backend (ProcessDeepFortuneReadingJob or Celtic handler).
-  //   Replaces the prior "open admin web wallet" detour. Only visible when
-  //   the thread is a real reading and not yet paid.
+  // 💸 (2026-05-24) Quick-approve modal — operator marks an unpaid reading as
+  //   paid, which kicks off the fortune-telling flow on the backend
+  //   (ProcessDeepFortuneReadingJob or the Celtic handler, chosen by the row's
+  //   reading_type). Visible only while `canApproveActive` holds: a real
+  //   reading, a live unpaid bill, and not cancelled.
   const [approveOpen, setApproveOpen] = useState(false);
   const [approving, setApproving] = useState(false);
   // 💳 (2026-06-11) In-app credit adjust for the active thread's customer.
   const [creditOpen, setCreditOpen] = useState(false);
 
-  const performApprove = async (amount: 39 | 99) => {
+  const performApprove = async (amount: number) => {
     if (!active || approving) return;
+    // Re-check at the mutation site: the tile opens this modal after switching
+    //   threads, and a poll tick in between can turn a live bill into a
+    //   cancelled one. Never send mark-paid for a row we can't deliver on.
+    if (!canApproveActive) {
+      pushToast({
+        kind: 'warn',
+        title: 'อนุมัติไม่ได้',
+        body: 'บิลนี้ถูกยกเลิกหรือชำระแล้ว — รีเฟรชแล้วตรวจสอบอีกครั้ง',
+      });
+      setApproveOpen(false);
+      return;
+    }
     const rid = readingIdOf(active.id);
     if (!rid) return;
     setApproving(true);
@@ -521,8 +681,12 @@ function ChatPageInner() {
       await markReadingPaid(rid, { amount, note: `warroom_chat_approve_${amount}` });
       pushToast({
         kind: 'ok',
-        title: `✓ อนุมัติ ฿${amount} → ${active.name}`,
-        body: amount === 39 ? 'ส่งคำทำนาย Deep ให้แล้ว' : 'เริ่ม Celtic Cross flow แล้ว',
+        title: `✓ อนุมัติ ${thb(amount)} → ${active.name}`,
+        // Which flow runs is decided by the row's reading_type on the backend,
+        //   NOT by the amount picked here — the old message named the product
+        //   from the amount and so announced "Celtic" for any ฿99 approval,
+        //   including on a Deep reading.
+        body: flowNote(active.readingType),
       });
       setApproveOpen(false);
       // Pull fresh data so the header switches to "ชำระแล้ว" + transcript
@@ -538,12 +702,22 @@ function ChatPageInner() {
 
   const performBan = async (minutes: number | null, reason: string) => {
     if (!active || banLoading) return;
+    const pid = active.platformId;
+    if (!pid) {
+      pushToast({
+        kind: 'warn',
+        title: 'แบนไม่ได้',
+        body: 'ดวงนี้ไม่มีรหัสผู้ใช้ FB/LINE — แบนไปก็จะไม่ตรงกับผู้ใช้จริง',
+      });
+      setBanModalOpen(false);
+      return;
+    }
     const platform: 'facebook' | 'line' = active.channel === 'LINE' ? 'line' : 'facebook';
     setBanLoading(true);
     try {
       await banUser({
         platform,
-        platform_user_id: active.psid,
+        platform_user_id: pid,
         display_name: active.name,
         reason: reason || 'banned_from_warroom_chat',
         minutes: minutes ?? undefined, // omit → permanent
@@ -569,7 +743,8 @@ function ChatPageInner() {
     // always carries a real id — narrow the type here for the unbanUser call.
     if (!ban || ban.id == null) return;
     const banId = ban.id;
-    const psid = active.psid;
+    const psid = active.platformId;
+    if (!psid) return;
     // Snapshot for rollback if the server rejects.
     const prevStatus = banStatus[psid];
     setBanLoading(true);
@@ -699,7 +874,7 @@ function ChatPageInner() {
             const isActive = c.customerKey === activeCustomerKey;
             // Bot vs admin across ALL the customer's readings (stable), not the
             //   representative reading id which churns as funnel heat shifts.
-            const customerBotActive = !(c.memberIds ?? [c.id]).some((id) => bot[id] === false);
+            const customerBotActive = !(c.memberIds ?? [c.id]).some((id) => botOf(id) === false);
             return (
               <button
                 key={c.customerKey}
@@ -743,12 +918,19 @@ function ChatPageInner() {
       {viewMode === 'multi' && (
         <section className="flex flex-col bg-base min-h-0">
           <header className="px-4 py-2 border-b border-line bg-panel2/40 flex items-center gap-1.5 flex-wrap">
-            <span className="t-h shrink-0">มัลติวิว · ทุกแชตเรียลไทม์</span>
+            {/* It is the latest N readings, not literally every chat — saying
+                "ทุกแชต" hid the window from the operator. */}
+            <span
+              className="t-h shrink-0"
+              title={`ดึงดวงล่าสุด ${FORTUNE_FEED_PAGE_SIZE} รายการทุกรอบ แล้วยุบเป็นการ์ดละลูกค้า — ลูกค้าที่เงียบกว่านั้นจะไม่อยู่ในกริดนี้`}
+            >
+              มัลติวิว · ดวงล่าสุด {FORTUNE_FEED_PAGE_SIZE} รายการ
+            </span>
             <button
               onClick={() => setStageFilter('')}
               className={cn('pill', stageFilter === '' ? 'pill-info' : 'pill-dim')}
             >
-              ทั้งหมด {staged.length}
+              ลูกค้า {staged.length}
             </button>
             {(Object.keys(STAGE_META) as ChatStage[]).map((s) => (
               <button
@@ -762,6 +944,9 @@ function ChatPageInner() {
             ))}
             <span className="text-2xs text-mute ml-auto shrink-0">
               ขั้นตอนร้อนเด้งขึ้นบนสุดอัตโนมัติ · กดการ์ดเพื่อเข้าแชท
+            </span>
+            <span className="text-2xs text-mute w-full">
+              นับเป็นลูกค้า (ยุบหลายดวงของคนเดียวกันเป็นการ์ดเดียว) จากดวงล่าสุด {FORTUNE_FEED_PAGE_SIZE} รายการ
             </span>
           </header>
           <div className="flex-1 overflow-y-auto p-3 min-h-0 scanline">
@@ -797,26 +982,19 @@ function ChatPageInner() {
                           : null
                       }
                       flash={flashIds.has(t.customerKey)}
-                      // Approve only when the customer has an OUTSTANDING bill
-                      // (t.isPaid/t.due reflect the group's unpaid reading, not
-                      // the maybe-paid representative). Cancelled bills are
-                      // terminal COMPLETED rows — mark-paid would set is_paid but
-                      // skip the fortune-flow trigger (idempotency guard),
-                      // stranding the customer. Chat first.
-                      canApprove={
-                        paired &&
-                        t.isPaid === false &&
-                        t.due > 0 &&
-                        readingIdOf(approveId) != null &&
-                        stage !== 'cancelled_user' &&
-                        stage !== 'cancelled_system'
-                      }
+                      // approveId is non-null only when the group holds a LIVE
+                      // unpaid bill — the grouping already excluded cancelled
+                      // rows, which are terminal COMPLETED records: mark-paid
+                      // would flip is_paid but skip the fortune-flow trigger
+                      // (idempotency guard), stranding the customer. Chat first.
+                      canApprove={paired && approveId != null && readingIdOf(approveId) != null}
                       onOpen={() => {
                         setActiveId(t.id);
                         setViewMode('single');
                       }}
                       onApprove={() => {
-                        // Target the unpaid reading, not the representative.
+                        // Target the approvable unpaid reading, not the representative.
+                        if (!approveId) return;
                         setActiveId(approveId);
                         setApproveOpen(true);
                       }}
@@ -844,19 +1022,39 @@ function ChatPageInner() {
                     <Pill tone="ok"><span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse mr-1" />สด</Pill>
                   )}
                   {transcriptSource === 'structured' && <Pill tone="dim">สร้างใหม่</Pill>}
-                  {active.vip && <Pill tone="warn">VIP</Pill>}
-                  <Pill tone="mystic">{active.rarity}</Pill>
+                  {(activeCustomer?.t.vip ?? active.vip) && <Pill tone="warn">VIP</Pill>}
+                  <Pill tone="mystic">{activeCustomer?.t.rarity ?? active.rarity}</Pill>
                   {activeWorker && <ActiveWorkerBadge w={activeWorker} live={workerIsLive} />}
+                  {/* The REAL takeover state from /chat/takeover-status. It is
+                      time-boxed — the bot resumes on its own — so show the
+                      remaining minutes rather than an open-ended "admin is here". */}
+                  {takeover?.is_takeover && (
+                    <Pill tone="mystic">
+                      🛑 แอดมินคุมอยู่
+                      {takeover.remaining_minutes > 0 ? ` · เหลือ ${takeover.remaining_minutes} นาที` : ''}
+                    </Pill>
+                  )}
                   {currentBan?.is_banned && currentBan.ban && (
                     <BanStatusBadge ban={currentBan.ban} remainingSec={currentBan.remaining_seconds} onUnban={() => void performUnban()} loading={banLoading} />
                   )}
                 </div>
                 <div className="text-2xs text-mute mono mt-0.5">
-                  PSID {active.psid} · เปิดสนทนา {active.openedAt}
-                  {active.takenByName && (
+                  {/* Only call it a PSID when it IS one. Readings with no platform
+                      identity carry a synthetic "U-{userId}"/"id-{readingId}"
+                      placeholder, which the header used to print as if it were a
+                      real Messenger id. */}
+                  {active.platformId
+                    ? `${active.channel === 'LINE' ? 'LINE ID' : 'PSID'} ${active.platformId}`
+                    : '⚠️ ไม่มีรหัสผู้ใช้บนแพลตฟอร์ม'}
+                  {' · เปิดสนทนา '}
+                  {active.openedAt}
+                  {/* response_type==='admin' only tells us an admin wrote the last
+                      reply — it carries no admin identity and is not a takeover
+                      timestamp, so we no longer print a made-up name. */}
+                  {active.takenBy && active.takenAt && (
                     <>
-                      {' · เทคโอเวอร์โดย '}
-                      <span className="text-info">{active.takenByName}</span> ({active.takenAt})
+                      {' · แอดมินตอบล่าสุด '}
+                      <span className="text-info">{active.takenAt}</span>
                     </>
                   )}
                 </div>
@@ -864,12 +1062,12 @@ function ChatPageInner() {
               <label className="flex items-center gap-1.5 text-2xs text-dim">
                 บอท
                 <Switch
-                  checked={bot[active.id]}
+                  checked={botOf(active.id)}
                   disabled={takeoverBusy}
                   onChange={(v) => void setBotForThread(active.id, v)}
                 />
               </label>
-              {!bot[active.id] && (
+              {!botOf(active.id) && (
                 <button
                   onClick={() => void setBotForThread(active.id, true)}
                   disabled={takeoverBusy}
@@ -879,24 +1077,48 @@ function ChatPageInner() {
                 </button>
               )}
               {/* 💸 (2026-05-24) Quick-approve — mark paid + trigger fortune flow.
-                  Only shown when this is a real reading and not yet paid. */}
-              {paired && active.isPaid === false && readingIdOf(active.id) && (
+                  Requires a LIVE bill: unpaid, an actual amount owed, and not
+                  cancelled. The old test was `isPaid === false` alone, which also
+                  matched (a) free/intake rows with no bill and (b) CANCELLED
+                  rows. Approving a cancelled row is the dangerous one: the
+                  backend flips is_paid but its idempotency guard skips delivery
+                  (a cancelled reading sits at conversation_status='completed'),
+                  so the operator is told "ส่งคำทำนายให้แล้ว" while the customer
+                  is recorded as paid and receives nothing. */}
+              {canApproveActive && (
                 <button
                   onClick={() => setApproveOpen(true)}
                   className="btn btn-ok"
                   title="อนุมัติชำระเงิน → ส่งคำทำนายให้ลูกค้าทันที"
                   disabled={approving}
                 >
-                  {approving ? '⏳ กำลังอนุมัติ...' : '✓ อนุมัติชำระ'}
+                  {approving ? '⏳ กำลังอนุมัติ...' : `✓ อนุมัติชำระ ${thb(active.due)}`}
                 </button>
               )}
+              {/* Say WHY approve is unavailable on a cancelled bill, so the
+                  operator doesn't go hunting for a button we removed on purpose. */}
+              {paired &&
+                active.isPaid === false &&
+                active.due > 0 &&
+                (activeStage === 'cancelled_user' || activeStage === 'cancelled_system') && (
+                  <span
+                    className="pill pill-dim border-dashed shrink-0"
+                    title="บิลนี้ถูกยกเลิกแล้ว — การมาร์คจ่ายจะไม่ส่งคำทำนายให้ลูกค้า ให้คุยกับลูกค้าเพื่อออกบิลใหม่แทน"
+                  >
+                    บิลถูกยกเลิก — อนุมัติไม่ได้
+                  </span>
+                )}
               {/* 🚫 (2026-05-24) Quick-ban — same pattern as admin /takeover */}
               {!currentBan?.is_banned && (
                 <button
                   onClick={() => setBanModalOpen(true)}
-                  className="btn btn-ghost text-rose-400 hover:bg-rose-500/10 border-rose-500/30"
-                  title="แบนลูกค้านี้ — บอทจะไม่ตอบอีก"
-                  disabled={!paired}
+                  className="btn btn-ghost text-rose-400 hover:bg-rose-500/10 border-rose-500/30 disabled:opacity-40"
+                  title={
+                    !active.platformId
+                      ? 'แบนไม่ได้ — ดวงนี้ไม่มีรหัสผู้ใช้ FB/LINE ที่อ้างอิงได้'
+                      : 'แบนลูกค้านี้ — บอทจะไม่ตอบอีก'
+                  }
+                  disabled={!paired || !active.platformId}
                 >
                   🚫 แบน
                 </button>
@@ -916,7 +1138,7 @@ function ChatPageInner() {
                       id: m.id,
                       role: m.role,
                       text: m.text,
-                      ts: m.ts ? m.ts.slice(11, 16) : '',
+                      ts: formatMsgTime(m.ts),
                       by: m.by ?? undefined,
                       ai: m.ai ?? undefined,
                       image_url: m.image_url ?? undefined,
@@ -925,6 +1147,19 @@ function ChatPageInner() {
                 if (isLoading && rendered.length === 0) {
                   return (
                     <div className="text-center text-2xs text-mute p-6">กำลังโหลดประวัติสนทนา...</div>
+                  );
+                }
+                // A resolved-but-empty transcript used to render literally
+                //   nothing — a blank pane the operator can't tell apart from a
+                //   broken fetch. Say what is (and isn't) stored.
+                if (rendered.length === 0) {
+                  return (
+                    <div className="text-center text-2xs text-mute p-6">
+                      ยังไม่มีข้อความที่บันทึกไว้สำหรับดวงนี้
+                      <div className="mt-1 opacity-70">
+                        ระบบเก็บคำถาม · คำทำนาย · ไพ่ที่เปิด · แชตสดของวันนี้ — บทสนทนาทั่วไปก่อนหน้านั้นไม่ได้ถูกบันทึก
+                      </div>
+                    </div>
                   );
                 }
                 return rendered.map((m) => {
@@ -1041,12 +1276,24 @@ function ChatPageInner() {
                   </button>
                   <button
                     className="btn btn-ghost h-7 w-7 justify-center"
-                    title="แทรก PromptPay QR text"
+                    title={
+                      'แทรกข้อความแจ้งโอนเงิน (PromptPay ' +
+                      PROMPTPAY_RECEIVER +
+                      ')\n⚠️ ยอดกลม ๆ จะจับคู่สลิปอัตโนมัติไม่ได้ — บอทออกยอดเฉพาะให้แต่ละบิล ถ้าเป็นไปได้ให้ลูกค้าใช้ QR ที่บอทส่งไปแทน'
+                    }
                     onClick={() => {
-                      const amount = window.prompt('ยอดที่จะส่ง QR (THB)', String(active.due || 99));
+                      const amount = window.prompt(
+                        'ยอดที่จะแจ้งลูกค้า (THB)\n\n⚠️ ระบบจับคู่การโอนอัตโนมัติด้วย "ยอดเฉพาะ" ที่บอทออกให้แต่ละบิล\nถ้าแจ้งยอดกลม ๆ เอง สลิปจะไม่ถูกจับคู่ ต้องมาอนุมัติเองในหน้านี้',
+                        String(active.due || 99),
+                      );
                       const n = amount ? Number(amount) : NaN;
                       if (!Number.isFinite(n) || n <= 0) return;
-                      setDraft((d) => d + (d ? '\n' : '') + 'โอน ฿' + n.toLocaleString() + ' มาที่ PromptPay 0805782958 (ขอบคุณค่ะ ✨)');
+                      setDraft(
+                        (d) =>
+                          d +
+                          (d ? '\n' : '') +
+                          `โอน ${thb(n)} มาที่ PromptPay ${PROMPTPAY_RECEIVER} (ขอบคุณค่ะ ✨)`,
+                      );
                     }}
                   >
                     ▦
@@ -1115,11 +1362,13 @@ function ChatPageInner() {
                   <div className="flex-1">
                     <div className="font-semibold text-fg text-sm">{active.name}</div>
                     <div className="flex items-center gap-1 mt-1">
-                      <Pill tone="mystic">{active.rarity}</Pill>
-                      {active.vip && <Pill tone="warn">VIP</Pill>}
+                      <Pill tone="mystic">{activeCustomer?.t.rarity ?? active.rarity}</Pill>
+                      {(activeCustomer?.t.vip ?? active.vip) && <Pill tone="warn">VIP</Pill>}
                     </div>
+                    {/* EXP was always the literal string "—" — there is no XP system
+                        behind it, so it is gone rather than dressed up as a stat. */}
                     <div className="text-2xs mono text-dim mt-1">
-                      LV <span className="text-mystic font-bold">{active.level}</span> · EXP {active.exp}
+                      LV <span className="text-mystic font-bold">{activeCustomer?.t.level ?? active.level}</span>
                     </div>
                   </div>
                 </div>
@@ -1130,21 +1379,64 @@ function ChatPageInner() {
           <div className="p-3 border-b border-line">
             <div className="t-h mb-2">เครดิต & การเงิน</div>
             <div className="grid grid-cols-2 gap-2 text-2xs">
-              <div className="bg-panel border border-line rounded p-2">
+              <div
+                className="bg-panel border border-line rounded p-2"
+                title={
+                  credit.status === 'none'
+                    ? 'ลูกค้าที่ทักผ่านบอทอย่างเดียว ไม่มีกระเป๋าเงินบนเว็บ'
+                    : credit.status === 'error'
+                    ? 'ดึงยอดเครดิตไม่สำเร็จ'
+                    : 'ยอดคงเหลือจริงในกระเป๋าเงินเว็บ'
+                }
+              >
                 <div className="text-mute">เครดิตคงเหลือ</div>
-                <div className="mono text-info text-base font-semibold">{active.credits}</div>
+                <div className="mono text-info text-base font-semibold">
+                  {credit.status === 'ready'
+                    ? thb(credit.balance ?? 0)
+                    : credit.status === 'loading'
+                    ? '…'
+                    : '—'}
+                </div>
               </div>
-              <div className="bg-panel border border-line rounded p-2">
+              <div
+                className="bg-panel border border-line rounded p-2"
+                title="รวมเฉพาะยอดที่ชำระจริง จากทุกดวงของลูกค้าคนนี้ในฟีด ไม่นับบิลที่ยังไม่จ่ายหรือถูกยกเลิก"
+              >
                 <div className="text-mute">LTV รวม</div>
-                <div className="mono text-ok text-base font-semibold">฿{active.ltv.toLocaleString()}</div>
+                <div className="mono text-ok text-base font-semibold">
+                  {thb(activeCustomer?.t.ltv ?? active.ltv)}
+                </div>
               </div>
-              <div className="bg-panel border border-line rounded p-2">
-                <div className="text-mute">ดูดวงทั้งหมด</div>
-                <div className="mono text-fg text-base font-semibold">{recentTotal != null ? recentTotal : '—'}</div>
+              <div
+                className="bg-panel border border-line rounded p-2"
+                title={
+                  recentTotal != null
+                    ? 'จำนวนดวงทั้งหมดจากบัญชีเว็บของลูกค้า'
+                    : 'ลูกค้าไม่มีบัญชีเว็บ — นับได้เฉพาะดวงที่อยู่ในฟีดล่าสุดเท่านั้น'
+                }
+              >
+                <div className="text-mute">{recentTotal != null ? 'ดูดวงทั้งหมด' : 'ดูดวง (ในฟีด)'}</div>
+                <div className="mono text-fg text-base font-semibold">
+                  {recentTotal != null ? recentTotal : activeCustomer?.memberCount ?? 1}
+                </div>
               </div>
-              <div className="bg-panel border border-line rounded p-2">
-                <div className="text-mute">ค้างจ่าย</div>
-                <div className="mono text-warn text-base font-semibold">฿{active.due}</div>
+              <div
+                className="bg-panel border border-line rounded p-2"
+                title={
+                  activeCustomer
+                    ? `รวม ${activeCustomer.unpaidCount} บิลที่ยังไม่ชำระของลูกค้าคนนี้ในฟีด (นับบิลที่ถูกยกเลิกด้วย)`
+                    : 'ยอดบิลที่ยังไม่ชำระของดวงนี้'
+                }
+              >
+                <div className="text-mute">
+                  ค้างจ่าย
+                  {activeCustomer && activeCustomer.unpaidCount > 1 && (
+                    <span className="opacity-70"> ({activeCustomer.unpaidCount} บิล)</span>
+                  )}
+                </div>
+                <div className="mono text-warn text-base font-semibold">
+                  {thb(activeCustomer?.dueTotal ?? active.due)}
+                </div>
               </div>
             </div>
             <div className="flex gap-1 mt-2">
@@ -1206,7 +1498,7 @@ function ChatPageInner() {
       {active && banModalOpen && (
         <BanModal
           customerName={active.name}
-          psid={active.psid}
+          psid={active.platformId ?? active.psid}
           platform={active.channel === 'LINE' ? 'line' : 'facebook'}
           loading={banLoading}
           onClose={() => setBanModalOpen(false)}
@@ -1221,6 +1513,7 @@ function ChatPageInner() {
         <ApproveModal
           customerName={active.name}
           due={active.due}
+          readingType={active.readingType}
           loading={approving}
           onClose={() => setApproveOpen(false)}
           onConfirm={(amount) => performApprove(amount)}
@@ -1233,6 +1526,7 @@ function ChatPageInner() {
           userId={active.userId}
           customerName={active.name}
           onClose={() => setCreditOpen(false)}
+          onDone={refreshCredit}
         />
       )}
     </div>
@@ -1390,30 +1684,45 @@ function BanModal({
   );
 }
 
-// 💸 (2026-05-24) Approve-payment modal. Two presets only (Deep 39 / Celtic 99)
-// because those are the only live SKUs — adding a custom-amount input was
-// declined by the user; if a third tier ships, add another preset here.
+// 💸 (2026-05-24) Approve-payment modal. Picks the amount to RECORD; the product
+// and the flow that runs afterwards come from the reading's own reading_type on
+// the backend. Presets are the two standard prices plus, when the bill is
+// neither (real ฿40 / ฿100 bills exist), the bill's actual figure — mark-paid
+// overwrites amount_paid with whatever we send, so approving ฿39 on a ฿40 bill
+// silently under-records the sale.
 function ApproveModal({
   customerName,
   due,
+  readingType,
   loading,
   onClose,
   onConfirm,
 }: {
   customerName: string;
   due: number;
+  readingType?: string | null;
   loading: boolean;
   onClose: () => void;
-  onConfirm: (amount: 39 | 99) => void;
+  onConfirm: (amount: number) => void;
 }) {
-  // Pre-select based on the customer's outstanding bill so one click commits.
-  // Falls through to 39 when due is 0 (fresh thread, no tier picked yet).
-  const presetFromDue: 39 | 99 = due >= 99 ? 99 : 39;
-  const [selected, setSelected] = useState<39 | 99>(presetFromDue);
+  // 💸 This modal picks the amount to RECORD — it does not pick the product.
+  //   The backend routes the post-payment flow off the reading's own
+  //   reading_type column, so the two ฿39/฿99 buttons were never a tier chooser
+  //   even though they were labelled "เลือกแพคเกจ" with product descriptions.
+  //   The bill's real product is stated read-only instead.
+  const product = productOf(readingType);
+  // Exact-bill option: real bills of ฿40 / ฿100 exist. Approving ฿39 on a ฿40
+  //   bill OVERWRITES amount_paid with 39 (mark-paid writes the amount we send),
+  //   quietly under-recording the sale. Offer the true figure and default to it.
+  const exact = due > 0 && due !== 39 && due !== 99 ? Math.round(due) : null;
+  const [selected, setSelected] = useState<number>(exact ?? (due >= 99 ? 99 : 39));
 
-  const presets: Array<{ amount: 39 | 99; label: string; tier: string; tone: 'info' | 'mystic' }> = [
-    { amount: 39, label: '฿39', tier: 'Deep · ทำนายเชิงลึก 2 ข้อ', tone: 'info' },
-    { amount: 99, label: '฿99', tier: 'Celtic Cross · 10 ใบ + 3 คำถาม', tone: 'mystic' },
+  const presets: Array<{ amount: number; label: string; tier: string; tone: 'info' | 'mystic' }> = [
+    { amount: 39, label: '฿39', tier: 'ราคาเชิงลึกมาตรฐาน', tone: 'info' },
+    { amount: 99, label: '฿99', tier: 'ราคา Celtic มาตรฐาน', tone: 'mystic' },
+    ...(exact
+      ? [{ amount: exact, label: thb(exact), tier: 'ยอดตามบิลจริง', tone: 'info' as const }]
+      : []),
   ];
 
   return (
@@ -1435,9 +1744,13 @@ function ApproveModal({
               {due > 0 && (
                 <>
                   {' · '}
-                  <span className="text-warn">ยอดในบิล ฿{due.toLocaleString()}</span>
+                  <span className="text-warn">ยอดในบิล {thb(due)}</span>
                 </>
               )}
+            </div>
+            <div className="text-2xs mt-1">
+              <span className="text-mute">แพ็กเกจของบิลนี้: </span>
+              <span className="text-fg font-semibold">{product}</span>
             </div>
           </div>
           <button onClick={onClose} className="btn btn-ghost text-mute" title="ปิด">
@@ -1445,8 +1758,11 @@ function ApproveModal({
           </button>
         </div>
 
-        <div className="text-2xs text-mute mb-1.5">เลือกแพคเกจ</div>
-        <div className="grid grid-cols-2 gap-2 mb-3">
+        <div className="text-2xs text-mute mb-1.5">
+          ยอดที่จะบันทึกเป็นการชำระ{' '}
+          <span className="opacity-70">(ไม่ได้เปลี่ยนแพ็กเกจ — ระบบส่งตามแพ็กเกจของบิลด้านบน)</span>
+        </div>
+        <div className={cn('grid gap-2 mb-3', exact ? 'grid-cols-3' : 'grid-cols-2')}>
           {presets.map((p) => {
             const isSel = p.amount === selected;
             return (
@@ -1478,12 +1794,62 @@ function ApproveModal({
             disabled={loading}
             className="btn btn-ok flex-1 justify-center"
           >
-            {loading ? 'กำลังอนุมัติ...' : `✓ อนุมัติ ฿${selected}`}
+            {loading ? 'กำลังอนุมัติ...' : `✓ อนุมัติ ${thb(selected)}`}
           </button>
         </div>
       </div>
     </div>
   );
+}
+
+/** Clock time for a server transcript message. The backend serialises with an
+ *  explicit offset (Carbon toIso8601String under app.timezone=Asia/Bangkok), so
+ *  slicing characters 11–16 is correct today — but it turns silently 7 hours
+ *  wrong the moment a value arrives as UTC ("…T03:00:00Z"). Parse whenever the
+ *  string carries a zone; slice only as the fallback for zone-less values. */
+function formatMsgTime(ts?: string | null): string {
+  if (!ts) return '';
+  if (/(Z|[+-]\d{2}:?\d{2})$/.test(ts)) {
+    const d = new Date(ts);
+    if (!Number.isNaN(d.getTime())) {
+      return d.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+    }
+  }
+  return ts.slice(11, 16);
+}
+
+/** Product named by the reading's own reading_type column — the single thing
+ *  that decides which fortune flow the backend runs after mark-paid. Values
+ *  verified against Thaiprompt-Affiliate FortuneReading::READING_TYPE_*. */
+function productOf(readingType?: string | null): string {
+  switch ((readingType ?? '').toLowerCase()) {
+    case 'celtic_cross':
+      return '💎 Celtic Cross 99 (10 ใบ + คำถาม)';
+    case 'deep':
+      return '🌟 ทำนายเชิงลึก 39';
+    case 'basic':
+      return 'ทั่วไป (ฟรี)';
+    default:
+      return 'ไม่ระบุ';
+  }
+}
+
+/** What actually happens after mark-paid, worded per product. */
+function flowNote(readingType?: string | null): string {
+  switch ((readingType ?? '').toLowerCase()) {
+    case 'celtic_cross':
+      return 'เริ่ม Celtic Cross flow ให้แล้ว';
+    case 'deep':
+      return 'ส่งคำทำนายเชิงลึกให้แล้ว';
+    default:
+      return 'มาร์คบิลแล้ว — ระบบเริ่มส่งคำทำนายให้ลูกค้า';
+  }
+}
+
+/** Baht with thousands separators. Kept in one place so a stray `฿{n}` (no
+ *  separator) can't sit next to a formatted one in the same panel. */
+function thb(n: number): string {
+  return `฿${Math.round(n || 0).toLocaleString()}`;
 }
 
 function formatRemaining(sec: number): string {
@@ -1641,7 +2007,7 @@ function MultiTile({
 
       <div className="flex items-center gap-1.5">
         {t.due > 0 && (
-          <span className="text-2xs text-warn mono shrink-0">บิล ฿{t.due.toLocaleString()}</span>
+          <span className="text-2xs text-warn mono shrink-0">บิล {thb(t.due)}</span>
         )}
         <div className="flex-1" />
         {canApprove && (

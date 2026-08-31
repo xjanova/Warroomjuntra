@@ -8,6 +8,23 @@
 
 export type PromptPayTarget = string; // phone (0XX...) or 13-digit national ID
 
+/**
+ * ⚠️ The receiving PromptPay number warroom quotes to customers.
+ *
+ * This is a MIRROR, not the source of truth. The Fortune Bot reads the live
+ * account from the database (`bank_accounts.promptpay_id`, falling back to the
+ * payment-gateway credential — see PromptPayProvider in Thaiprompt-Affiliate),
+ * and an operator can rotate it from admin web at any time. Nothing syncs that
+ * change to this constant, so if the two ever disagree warroom will send
+ * customers to an account that no longer receives money.
+ *
+ * Previously this literal was duplicated in bills/page.tsx AND chat/page.tsx,
+ * which meant a rotation had to be caught in two places. Keep it here, and
+ * treat a mismatch report from the operator as a real bug — the proper fix is a
+ * `/api/admin` endpoint exposing the active bank account.
+ */
+export const PROMPTPAY_RECEIVER = '0805782958';
+
 export type PromptPayInput = {
   target: PromptPayTarget;
   amount?: number; // THB; omit for "any amount" static QR (POI=11)

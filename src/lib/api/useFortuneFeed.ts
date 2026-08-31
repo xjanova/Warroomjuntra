@@ -4,6 +4,11 @@ import { useAdminData, fetchFortuneReadings, type FortuneReading } from '@/lib/a
 
 const EMPTY: FortuneReading[] = [];
 
+/** How many readings the shared fortune feed pulls per refresh. Exported so a
+ *  page can state its window honestly rather than implying it shows every
+ *  conversation that exists. */
+export const FORTUNE_FEED_PAGE_SIZE = 30;
+
 /**
  * Single shared fetcher for /fortune/readings. Pulls 30 latest readings.
  *
@@ -18,7 +23,7 @@ export function useFortuneFeed() {
   return useAdminData<FortuneReading[]>({
     key: 'fortune-feed',
     fetcher: async () => {
-      const res = await fetchFortuneReadings({ per_page: 30 });
+      const res = await fetchFortuneReadings({ per_page: FORTUNE_FEED_PAGE_SIZE });
       return res.data;
     },
     mock: EMPTY,

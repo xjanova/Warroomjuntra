@@ -9,11 +9,11 @@ import { useWarroom } from '@/lib/stores/warroom';
 import { useFortuneFeed, markReadingPaid, refundReading, cancelReading, describeError } from '@/lib/api';
 import { useSettings, isPaired as isPairedFn } from '@/lib/stores/settings';
 import { readingToBill } from '@/lib/adapters/bills';
+import { PROMPTPAY_RECEIVER } from '@/lib/payment/promptpay';
 
-// PromptPay receiver — same number Fortune Bot quotes to customers in the chat
-// composer (see chat/page.tsx). TODO: move to Settings store so the operator can
-// rotate it without redeploying.
-const PROMPTPAY_TARGET = '0805782958';
+// PromptPay receiver — single shared mirror of the live account (see the
+// PROMPTPAY_RECEIVER doc comment for why it can drift from the DB).
+const PROMPTPAY_TARGET = PROMPTPAY_RECEIVER;
 
 const TONE_COLOR: Record<string, string> = {
   fg: '#e5e7eb',

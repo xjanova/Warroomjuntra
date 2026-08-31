@@ -196,8 +196,12 @@ export function readingToChatThread(r: FortuneReading): ChatThread {
     else if (r.rating >= 4) sentiment = 'happy';
   }
 
-  // rarity from LTV proxy (amount_paid is a thin proxy)
-  const ltv = Math.round(r.amount_paid || 0);
+  // 💰 Revenue actually COLLECTED on this reading. `amount_paid` carries the
+  //   BILLED amount while is_paid is still false (that is exactly what `due`
+  //   reads below), so counting it unconditionally turned unpaid + cancelled
+  //   bills into earnings — a customer who walked away from three ฿99 bills read
+  //   "LTV ฿297" and could even cross the VIP line. Only paid rows count.
+  const ltv = r.is_paid ? Math.round(r.amount_paid || 0) : 0;
   const rarity = bucketRarity(ltv);
 
   const messages = buildMessages(r);
@@ -208,6 +212,12 @@ export function readingToChatThread(r: FortuneReading): ChatThread {
     name: customer,
     channel,
     psid,
+    // 🚫 The REAL FB PSID / LINE userId, or null when this reading carries no
+    //   platform identity at all. `psid` above falls back to a synthetic
+    //   "U-{userId}" / "id-{readingId}" for display — those are NOT addressable on
+    //   FB/LINE, so ban / unban / ban-status must key off THIS field or they
+    //   silently write a record that matches nobody.
+    platformId,
     userId: r.user?.id ?? null,
     customerKey,
     openedAt,
@@ -228,20 +238,43 @@ export function readingToChatThread(r: FortuneReading): ChatThread {
     readings: 1,
     due: r.is_paid ? 0 : Math.round(r.amount_paid || 0),
     isPaid: r.is_paid,
+    // ✍️ response_type==='admin' means an admin wrote the LAST reply — it is not
+    //   the takeover flag and it carries no admin identity, so we no longer
+    //   invent a name ('admin') or call responded_at a takeover time. The chat
+    //   page renders this as "แอดมินตอบล่าสุด" and shows the real takeover
+    //   state separately from /chat/takeover-status.
     takenBy: bot ? undefined : { initial: 'AD', color: '#22d3ee' },
-    takenByName: bot ? undefined : 'admin',
     takenAt: r.responded_at ? formatTime(r.responded_at) : undefined,
+    readingType: r.reading_type ?? null,
+    // 🏷️ Product label straight from reading_type. This used to read
+    //   `reading_type === 'deep' ? '🔮 Celtic Cross'`, which tagged every ฿39 Deep
+    //   reading as Celtic and left real Celtic rows unlabelled — 'deep' is the
+    //   ฿39 เชิงลึก product; Celtic is 'celtic_cross'
+    //   (Thaiprompt-Affiliate FortuneReading::READING_TYPE_*).
     pinReason: r.cancellation
       ? r.cancellation.reason === 'user_cancelled'
         ? '🚨 ลูกค้ายกเลิกบิลเอง'
         : '❌ ' + (r.cancellation.label ?? 'ยกเลิกโดยระบบ')
-      : r.reading_type === 'deep'
-      ? '🔮 Celtic Cross'
       : !r.is_paid && r.amount_paid > 0
-      ? `💰 บิล ฿${r.amount_paid.toLocaleString()}`
-      : undefined,
+      ? `💰 บิล ฿${r.amount_paid.toLocaleString()}` +
+        (productLabel(r.reading_type) ? ` · ${productLabel(r.reading_type)}` : '')
+      : productLabel(r.reading_type),
     messages,
   };
+}
+
+/** Human label for the reading_type column. Mirrors the backend's own
+ *  getReadingTypeLabel() so warroom and admin-web name the same product the
+ *  same way. Returns undefined for 'basic' — nothing worth pinning. */
+function productLabel(t: FortuneReading['reading_type']): string | undefined {
+  switch ((t ?? '').toLowerCase()) {
+    case 'celtic_cross':
+      return '💎 Celtic 99';
+    case 'deep':
+      return '🌟 เชิงลึก 39';
+    default:
+      return undefined;
+  }
 }
 
 function buildMessages(r: FortuneReading): ChatMessage[] {
@@ -304,6 +337,18 @@ function normalizeQuestions(q: FortuneReading['questions']): string[] {
   if (!q) return ['(ไม่มีคำถาม)'];
   if (Array.isArray(q)) return q.filter(Boolean).map(String);
   return [String(q)];
+}
+
+/** Rarity / level for a CUSTOMER's total collected revenue. Exported so the chat
+ *  page can recompute them on a deduped card: the per-reading values spread from
+ *  the representative would otherwise sit right next to a summed LTV they
+ *  disagree with (rep earned ฿99, card shows ฿1,200 but still says COMMON). */
+export function rarityForLtv(ltv: number): ChatThread['rarity'] {
+  return bucketRarity(ltv);
+}
+
+export function levelForLtv(ltv: number): number {
+  return clamp(Math.floor(Math.log2((ltv || 1) + 1)), 1, 30);
 }
 
 function bucketRarity(ltv: number): ChatThread['rarity'] {
