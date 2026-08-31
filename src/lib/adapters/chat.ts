@@ -316,7 +316,14 @@ function buildMessages(r: FortuneReading): ChatMessage[] {
       by: isAdmin ? 'admin' : undefined,
       ts: formatTime(r.responded_at ?? r.created_at),
       ai: !isAdmin ? r.ai?.provider ?? undefined : undefined,
-      text: r.ai_response,
+      // The list feed asks for `preview=1`, so this can be the opening 200
+      //   characters rather than the whole reading. Say so — an operator must
+      //   not read a trimmed preview as the full text that went to the
+      //   customer. (This bubble is only the first-paint fallback anyway; the
+      //   transcript fetch replaces it with the real conversation.)
+      text: r.ai_response_truncated
+        ? r.ai_response + '\n\n(แสดงย่อ — เปิดแชทเพื่อดูคำทำนายเต็ม)'
+        : r.ai_response,
     });
   } else if (r.is_paid && !r.responded_at) {
     // Only a PAID reading is genuinely awaiting a prediction. An unpaid row with

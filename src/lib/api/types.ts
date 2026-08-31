@@ -83,6 +83,10 @@ export type FortuneReading = {
   //   the amount an operator approves.
   reading_type: 'basic' | 'deep' | 'celtic_cross' | string;
   ai_response: string | null;
+  /** True when `ai_response` above was shortened because the request asked for
+   *  `preview=1`. The full text is always available from the reading's own
+   *  transcript / show endpoint. */
+  ai_response_truncated?: boolean;
   reading_image_url: string | null;
   // 📸 (2026-05-24) Customer-sent image — payment slip or fortune-question
   //   picture. Surfaced as an image bubble in /chat transcript.

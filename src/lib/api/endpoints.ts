@@ -144,6 +144,12 @@ export async function fetchFortuneReadings(params?: {
   date_to?: string;
   per_page?: number;
   page?: number;
+  /** Ask the server to send `ai_response` truncated to a short preview instead
+   *  of the whole reading. A Celtic reading is 2–4k characters; multiplied by a
+   *  100-row window on every poll tick that is the bulk of the payload, and no
+   *  list view renders more than ~200 chars of it anyway. Opt-in: omit it and
+   *  the full text comes back exactly as before. */
+  preview?: boolean;
 }) {
   const qs = toQuery(params);
   return apiRequest<FortuneReadingsResponse>({ path: `/fortune/readings${qs}` });
