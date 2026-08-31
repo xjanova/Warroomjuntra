@@ -9,11 +9,10 @@ import { DataSourceBadge } from '@/components/ui/DataSourceBadge';
 import { Switch } from '@/components/ui/Switch';
 import { Kbd } from '@/components/ui/Kbd';
 import { useWarroom } from '@/lib/stores/warroom';
-import { useFortuneFeed, FORTUNE_FEED_PAGE_SIZE, fetchWallets, sendChatMessage, suggestChatReply, fetchReadingTranscript, fetchFortuneWorkersQueue, fetchBanStatus, banUser, unbanUser, markReadingPaid, fetchUserReadings, takeoverChat, resumeChatBot, fetchChatTakeoverStatus, useAdminData, describeError, type ReadingTranscriptMessage, type FortuneWorkersQueue, type WorkerCallRow, type BanStatusResponse, type ChatTakeoverStatus } from '@/lib/api';
+import { useFortuneFeed, FORTUNE_FEED_PAGE_SIZE, fetchWallets, usePayoutAccount, sendChatMessage, suggestChatReply, fetchReadingTranscript, fetchFortuneWorkersQueue, fetchBanStatus, banUser, unbanUser, markReadingPaid, fetchUserReadings, takeoverChat, resumeChatBot, fetchChatTakeoverStatus, useAdminData, describeError, type ReadingTranscriptMessage, type FortuneWorkersQueue, type WorkerCallRow, type BanStatusResponse, type ChatTakeoverStatus } from '@/lib/api';
 import { useSettings, isPaired as isPairedFn } from '@/lib/stores/settings';
 import { readingToChatThread, STAGE_META, COLD_STAGES, rarityForLtv, levelForLtv } from '@/lib/adapters/chat';
 import { CreditModal } from '@/components/warroom/CreditModal';
-import { PROMPTPAY_RECEIVER } from '@/lib/payment/promptpay';
 import { cn } from '@/lib/utils';
 
 // Static-export builds require useSearchParams() to be inside a Suspense
@@ -137,6 +136,10 @@ function ChatPageInner() {
   const [suggesting, setSuggesting] = useState(false);
   const pushToast = useWarroom((s) => s.pushToast);
   const paired = useSettings((s) => isPairedFn(s));
+  // 💳 The account the BOT is collecting into right now. Fetched, never
+  //   hardcoded — an admin can re-tick it in admin web and warroom must not go
+  //   on quoting the old number. Shares a cache key with /bills.
+  const payout = usePayoutAccount();
 
   // Active chat thread → reading id (live threads have id like "r-{id}").
   const readingIdOf = (threadId: string): number | null => {
@@ -1275,13 +1278,18 @@ function ChatPageInner() {
                     📎
                   </button>
                   <button
-                    className="btn btn-ghost h-7 w-7 justify-center"
+                    className="btn btn-ghost h-7 w-7 justify-center disabled:opacity-40"
+                    disabled={!payout.promptPayId}
                     title={
-                      'แทรกข้อความแจ้งโอนเงิน (PromptPay ' +
-                      PROMPTPAY_RECEIVER +
-                      ')\n⚠️ ยอดกลม ๆ จะจับคู่สลิปอัตโนมัติไม่ได้ — บอทออกยอดเฉพาะให้แต่ละบิล ถ้าเป็นไปได้ให้ลูกค้าใช้ QR ที่บอทส่งไปแทน'
+                      payout.promptPayId
+                        ? `แทรกข้อความแจ้งโอนเงิน (PromptPay ${payout.promptPayId})\n⚠️ ยอดกลม ๆ จะจับคู่สลิปอัตโนมัติไม่ได้ — บอทออกยอดเฉพาะให้แต่ละบิล ถ้าเป็นไปได้ให้ลูกค้าใช้ QR ที่บอทส่งไปแทน`
+                        : 'ยังไม่รู้บัญชีรับเงินที่บอทใช้อยู่ — กันแจ้งเลขบัญชีผิดให้ลูกค้า'
                     }
                     onClick={() => {
+                      // Never fall back to a hardcoded number here — this
+                      // text goes straight to a paying customer.
+                      const target = payout.promptPayId;
+                      if (!target) return;
                       const amount = window.prompt(
                         'ยอดที่จะแจ้งลูกค้า (THB)\n\n⚠️ ระบบจับคู่การโอนอัตโนมัติด้วย "ยอดเฉพาะ" ที่บอทออกให้แต่ละบิล\nถ้าแจ้งยอดกลม ๆ เอง สลิปจะไม่ถูกจับคู่ ต้องมาอนุมัติเองในหน้านี้',
                         String(active.due || 99),
@@ -1292,7 +1300,7 @@ function ChatPageInner() {
                         (d) =>
                           d +
                           (d ? '\n' : '') +
-                          `โอน ${thb(n)} มาที่ PromptPay ${PROMPTPAY_RECEIVER} (ขอบคุณค่ะ ✨)`,
+                          `โอน ${thb(n)} มาที่ PromptPay ${target} (ขอบคุณค่ะ ✨)`,
                       );
                     }}
                   >

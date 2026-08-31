@@ -9,11 +9,11 @@ import { useWarroom } from '@/lib/stores/warroom';
 import { useFortuneFeed, markReadingPaid, refundReading, cancelReading, describeError } from '@/lib/api';
 import { useSettings, isPaired as isPairedFn } from '@/lib/stores/settings';
 import { readingToBill } from '@/lib/adapters/bills';
-import { PROMPTPAY_RECEIVER } from '@/lib/payment/promptpay';
+import { usePayoutAccount } from '@/lib/api';
 
-// PromptPay receiver — single shared mirror of the live account (see the
-// PROMPTPAY_RECEIVER doc comment for why it can drift from the DB).
-const PROMPTPAY_TARGET = PROMPTPAY_RECEIVER;
+// The receiving account is fetched live via usePayoutAccount() — see that hook
+// for why hardcoding it (which this file used to do) silently sends customers to
+// a retired account the moment an admin rotates it.
 
 const TONE_COLOR: Record<string, string> = {
   fg: '#e5e7eb',
@@ -26,6 +26,9 @@ const TONE_COLOR: Record<string, string> = {
 
 export default function BillsPage() {
   const feed = useFortuneFeed();
+  // Live receiving account (shared cache key with /chat — one request for both).
+  const payout = usePayoutAccount();
+  const payoutId = payout.promptPayId;
   const bills = useMemo<Bill[]>(() => {
     if (feed.source === 'live' && feed.data.length > 0) {
       return feed.data.map(readingToBill);
@@ -299,20 +302,45 @@ export default function BillsPage() {
               </div>
               <div>
                 <div className="t-h mb-2">QR Code ส่งให้ลูกค้า</div>
-                <div className="grid place-items-center">
-                  <PromptPayQR
-                    target={PROMPTPAY_TARGET}
-                    amount={
-                      active.status === 'paid' || active.status === 'refunded' || active.status === 'cancelled'
-                        ? undefined
-                        : active.amount
-                    }
-                    size={160}
-                  />
-                </div>
-                <div className="text-2xs text-center text-mute mt-1 mono">
-                  PromptPay {PROMPTPAY_TARGET} · {active.id}
-                </div>
+                {/* No hardcoded fallback on purpose: a QR built from a stale
+                    number sends the customer's money to an account nobody
+                    watches, and the SMS matcher then rejects a slip that was
+                    actually paid correctly. Better to show nothing. */}
+                {payoutId ? (
+                  <>
+                    <div className="grid place-items-center">
+                      <PromptPayQR
+                        target={payoutId}
+                        amount={
+                          active.status === 'paid' || active.status === 'refunded' || active.status === 'cancelled'
+                            ? undefined
+                            : active.amount
+                        }
+                        size={160}
+                      />
+                    </div>
+                    <div className="text-2xs text-center text-mute mt-1 mono">
+                      PromptPay {payoutId} · {active.id}
+                    </div>
+                    {payout.account?.account_name && (
+                      <div className="text-2xs text-center text-mute mt-0.5">
+                        {payout.account.account_name}
+                        {payout.account.bank_name ? ` · ${payout.account.bank_name}` : ''}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="text-2xs text-center text-warn border border-dashed border-warn/40 rounded p-3">
+                    {payout.isLoading
+                      ? 'กำลังดึงบัญชีรับเงิน...'
+                      : 'ยังไม่รู้บัญชีรับเงินที่บอทใช้อยู่ — ไม่แสดง QR เพื่อกันลูกค้าโอนผิดบัญชี'}
+                    {!payout.isLoading && (
+                      <button onClick={() => void payout.refetch()} className="btn btn-ghost text-2xs mt-2">
+                        ↻ ลองใหม่
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <button

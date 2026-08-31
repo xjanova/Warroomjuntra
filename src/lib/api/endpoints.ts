@@ -855,6 +855,28 @@ export async function fetchFortuneWorkersQueue() {
   return apiRequest<FortuneWorkersQueue>({ path: '/fortune/workers/queue' });
 }
 
+// ---- Payout account (the account the BOT is actually collecting into) ------
+
+/** The receiving account Fortune Bot quotes to customers right now. Resolved
+ *  server-side by FortuneTellingSetting::getFortunePromptpayAccount() — the very
+ *  same call FortuneConversationService::getPromptPayId() makes when it builds a
+ *  customer's QR — so warroom, juntraweb and the bot can never disagree. */
+export type FortunePayoutAccount = {
+  promptpay_id: string | null;
+  promptpay_type: string | null;
+  account_name: string | null;
+  account_number: string | null;
+  bank_code: string | null;
+  bank_name: string | null;
+  /** Whether incoming transfers to this account get auto-matched from bank SMS. */
+  sms_checker_enabled: boolean;
+  generated_at?: string | null;
+};
+
+export async function fetchFortunePayoutAccount() {
+  return apiRequest<FortunePayoutAccount>({ path: '/fortune/payout-account' });
+}
+
 // ---- Behavioral triage (Warroom dashboard triage queue) -------------------
 
 export type BehaviorCase = {
