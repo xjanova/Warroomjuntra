@@ -505,11 +505,19 @@ table.dense tbody tr.selected { background: rgba(34,211,238,.08); }
 @keyframes eve-rot { to { transform: translate(-50%, -50%) rotate(360deg); } }
 
 /* ============ AVATAR ============ */
-/* Wrapper: holds three masked copies of eve.svg + the HTML face overlay.
+/* Wrapper: three masked copies of eve-body.svg + the HTML face overlay.
    The "fake-layered" technique — render the same SVG three times, each clipped
    to a different anatomical band by a feathered mask-image, then animate each
    band on its own timing. Looks like a true layered rig, but is a single asset
-   the browser fetches once. */
+   the browser fetches once.
+
+   ⚠️ The source is /assets/eve-body.svg — the artwork with the illustrator's
+   original eyes, mouth and background paths REMOVED (clean skin + hair). The
+   face below is drawn onto that blank canvas. Do NOT point these layers back at
+   /assets/eve.svg: that file still has the painted face baked in, so the overlay
+   would sit on top of it and Eve ends up with two sets of eyes.
+   (eve.svg is still used by the minimized pill + launcher, which crop the
+   painted face as a background image — leave it in place for those.) */
 .eve-avatar {
   position: absolute; left: 50%; top: 50%;
   width: 200px; height: 200px;
@@ -525,14 +533,6 @@ table.dense tbody tr.selected { background: rgba(34,211,238,.08); }
   0%, 100% { transform: translate(-50%, -50%) translateX(0); }
   50%      { transform: translate(-50%, -50%) translateX(1.5px); }
 }
-.eve-avatar-img {
-  /* Kept as a fallback class — no longer used directly. Each layer below
-     uses .eve-layer + the per-region class. */
-  width: 100%; height: 100%;
-  object-fit: contain;
-  user-select: none;
-  -webkit-user-drag: none;
-}
 
 /* Common shape for every masked copy of the SVG. */
 .eve-layer {
@@ -546,11 +546,9 @@ table.dense tbody tr.selected { background: rgba(34,211,238,.08); }
 }
 
 /* HEAD + HAIR — top of the figure down through the chin.
-   Boundary must sit BELOW the face so the eyes (y=26%) and mouth (y=31%)
-   stay 100% on the head layer — never inside another layer's animation.
-   Previous mask faded 26→33% which put the mouth inside the feather zone
-   and the torso layer's breath-animated copy bled through, creating a
-   visible "ghost" jitter at the eyes. New boundary is at the neck (42→48%). */
+   Boundary must sit BELOW the face so the whole face box (17.5%–38.5%) stays
+   100% on the head layer, never inside another layer's animation. Boundary is
+   at the neck (42→48%). */
 .eve-layer-head {
   -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 42%, transparent 48%);
           mask-image: linear-gradient(to bottom, #000 0%, #000 42%, transparent 48%);
@@ -565,8 +563,8 @@ table.dense tbody tr.selected { background: rgba(34,211,238,.08); }
 }
 
 /* TORSO — neck-down through ribcage. Starts AFTER the face so the breath
-   animation never reaches eyes/mouth. Slightly different timing than the
-   head so they don't lock-step. */
+   animation never reaches it. Slightly different timing than the head so they
+   don't lock-step. */
 .eve-layer-torso {
   -webkit-mask-image: linear-gradient(to bottom, transparent 45%, #000 50%, #000 78%, transparent 85%);
           mask-image: linear-gradient(to bottom, transparent 45%, #000 50%, #000 78%, transparent 85%);
@@ -580,8 +578,7 @@ table.dense tbody tr.selected { background: rgba(34,211,238,.08); }
   50%      { transform: scaleY(1.018) translateY(-1px); }
 }
 
-/* LOWER — dress/skirt from hip down. Starts after the ribcage so its
-   sway never reaches the torso breath region. */
+/* LOWER — dress/skirt from hip down. */
 .eve-layer-lower {
   -webkit-mask-image: linear-gradient(to bottom, transparent 82%, #000 88%, #000 100%);
           mask-image: linear-gradient(to bottom, transparent 82%, #000 88%, #000 100%);
@@ -595,8 +592,7 @@ table.dense tbody tr.selected { background: rgba(34,211,238,.08); }
   50%      { transform: rotate(.8deg); }
 }
 
-/* Mood-driven overrides — these tweak per-layer motion without redefining
-   the keyframes. Tightened so they read clearly in the avatar context. */
+/* Mood-driven overrides — tweak per-layer motion without redefining keyframes. */
 .eve[data-mood="talking"] .eve-layer-head {
   animation: eve-head-bob 2.4s ease-in-out infinite;
 }
@@ -615,104 +611,167 @@ table.dense tbody tr.selected { background: rgba(34,211,238,.08); }
 }
 
 /* ============ FACE OVERLAY ============ */
+/* Ported from thaiprompt.online's <x-eve.avatar>. Every feature is a % of this
+   box, so the face stays registered at any EveAvatar `scale`. The box itself is
+   calibrated against the 2048×2048 artwork (face occupies the upper quarter).
+
+   ⚠️ Never use box-shadow for the lip/teeth shading here. box-shadow offsets
+   accept <length> only — percentages are dropped silently, which is why the
+   original `inset 0 -30% 0` lip and `inset 0 40% 0` teeth never rendered at all.
+   linear-gradient color-stops DO take %, and they stretch with the mouth. */
 .eve-face {
-  position: absolute; inset: 0;
+  position: absolute;
+  /* Centre calibrated against the artwork itself, not eyeballed: sampling the
+     rendered SVG shows the face skin (y 26-34%) and the neck (y 44-46%) both
+     centre on 50.0% of the canvas. Face-box centre must therefore be 50.0%, so
+     left = 50 - 25.4/2 = 37.3%. thaiprompt used 38.3%, which puts the mouth 1%
+     of the figure width right of the neck axis - small at their 110px badge,
+     clearly visible at the /eve page scale of 3. */
+  left: 37.3%; top: 17.5%;
+  width: 25.4%; height: 21%;
   pointer-events: none;
-  /* Glued to the head layer — same bob animation so eyes/mouth track the
-     SVG head wherever it moves. Without this the face floats statically
-     while the head rocks underneath, breaking the illusion. */
-  transform-origin: 50% 32%;
+  /* Glued to the head layer — same bob keyframes so the face tracks the SVG
+     head wherever it moves, instead of floating over it. */
+  transform-origin: 50% 70%;
   animation: eve-head-bob 4.2s ease-in-out infinite;
-  /* Calibrated against eve.svg (full-body figure, face occupies top quarter).
-     Tunable per-instance via React inline style on .eve-face. */
-  --eye-y: 26%;
-  --eyeL-x: 45%;
-  --eyeR-x: 55%;
-  --eye-w: 9px;
-  --eye-h: 4px;
-  --mouth-x: 50%;
-  --mouth-y: 31%;
-  --mouth-w: 18px;
 }
+.eve[data-mood="talking"] .eve-face { animation: eve-head-bob 2.4s ease-in-out infinite; }
+.eve[data-mood="thinking"] .eve-face {
+  animation: eve-head-bob 5.6s ease-in-out infinite, eve-head-tilt 3s ease-in-out infinite;
+}
+
+.eve-brow {
+  position: absolute; height: 3.4%; width: 19%;
+  background: #5a4a52; border-radius: 50%;
+  transition: transform .2s ease, top .2s ease;
+}
+.eve-brow.l { left: 12%; top: 16%; transform: rotate(-7deg); }
+.eve-brow.r { right: 12%; top: 16%; transform: rotate(7deg); }
 
 .eve-eye {
-  position: absolute;
-  width: var(--eye-w); height: var(--eye-h);
-  /* Dark brown matching the artwork's eye color so the static state blends. */
-  background: #2b1810;
-  border-radius: 50%;
-  top: var(--eye-y);
-  transform: translate(-50%, -50%);
-  box-shadow: 0 0 3px rgba(139, 92, 246, .35);
-  animation: eve-blink 5.2s infinite;
+  position: absolute; top: 38%;
+  width: 17%; height: 25%;
+  background: #3a2d3a; border-radius: 48%;
+  overflow: hidden; transform-origin: center;
+  animation: eve-blink 4.6s infinite;
 }
-.eve-eye.l { left: var(--eyeL-x); }
-.eve-eye.r { left: var(--eyeR-x); animation-delay: .04s; }
-.eve-eye::after {
-  content: ""; position: absolute; left: 50%; top: 30%;
-  width: 35%; height: 35%; border-radius: 50%;
-  background: #fff; opacity: .85;
-  transform: translate(-50%, -50%);
-}
+.eve-eye.l { left: 20%; }
+.eve-eye.r { right: 20%; }
 @keyframes eve-blink {
-  0%, 46%, 50%, 93%, 96%, 100% { transform: translate(-50%, -50%) scaleY(1); }
-  48%                          { transform: translate(-50%, -50%) scaleY(.08); }
-  94.5%                        { transform: translate(-50%, -50%) scaleY(.08); }
+  0%, 93%, 100% { transform: scaleY(1); }
+  96%           { transform: scaleY(.1); }
+}
+.eve-hi {
+  position: absolute; top: 12%; left: 44%;
+  width: 34%; height: 30%;
+  background: #fff; border-radius: 50%;
+}
+.eve-hi2 {
+  position: absolute; bottom: 16%; left: 16%;
+  width: 20%; height: 18%;
+  background: #fff; opacity: .7; border-radius: 50%;
 }
 
-.eve-eyes-pan { position: absolute; inset: 0; animation: eve-glance 11s ease-in-out infinite; }
-@keyframes eve-glance {
-  0%, 20%, 100% { transform: translateX(0); }
-  30%, 42%     { transform: translateX(-2px); }
-  60%, 72%     { transform: translateX(2px); }
+.eve-nose {
+  position: absolute; left: 47.5%; top: 55%;
+  width: 5%; height: 6%;
+  background: #e3a890; border-radius: 50%; opacity: .7;
 }
 
 .eve-mouth {
-  position: absolute;
-  left: var(--mouth-x); top: var(--mouth-y);
-  width: var(--mouth-w); height: 6px;
-  transform: translate(-50%, -50%);
-  pointer-events: none;
+  position: absolute; left: 50%; top: 64%;
+  transform: translateX(-50%);
+  width: 17%; height: 10%;
+  border-bottom: 3px solid #b56b7e;
+  border-radius: 0 0 70% 70%;
+  overflow: hidden;
 }
-.eve-mouth svg { display: block; width: 100%; height: 100%; overflow: visible; }
-.eve-mouth path {
-  fill: none; stroke: #3d1f2a; stroke-width: 2; stroke-linecap: round;
-  transition: d .35s cubic-bezier(.4, 0, .2, 1);
+/* Teeth / tongue are real elements (not fake shadows) — hidden unless a mood
+   actually needs them, so idle/thinking look exactly as before. */
+.eve-teeth, .eve-tongue {
+  position: absolute; left: 50%;
+  transform: translateX(-50%);
+  opacity: 0;
+}
+.eve-teeth { top: 0; width: 96%; height: 34%; background: #fff; border-radius: 0 0 26% 26%; }
+.eve-tongue { bottom: -6%; width: 62%; height: 44%; background: #d4657f; border-radius: 50% 50% 42% 42%; }
+
+.eve-dots {
+  position: absolute; right: -26%; top: 0;
+  color: #7a5cff; font-size: 9px; font-weight: 700;
+  letter-spacing: 1px; display: none;
+}
+.eve-spark {
+  position: absolute; top: 4%; right: -4%;
+  color: #ffce4d; font-size: 11px; display: none;
 }
 
-.eve[data-mood="idle"] .eve-mouth path { d: path("M 2 3 Q 11 6 20 3"); }
-.eve[data-mood="happy"] .eve-mouth { height: 10px; }
-.eve[data-mood="happy"] .eve-mouth path { d: path("M 1 2 Q 11 14 21 2"); stroke-width: 2.4; }
+/* ── talking: mouth opens and closes ── */
+.eve[data-mood="talking"] .eve-mouth {
+  width: 15%; height: 18%;
+  background: linear-gradient(#8e3450 0 68%, #c75d76 68%);
+  border: 0; border-radius: 50%;
+  animation: eve-talk .25s infinite;
+}
+@keyframes eve-talk { 0%, 100% { height: 7%; } 50% { height: 20%; } }
+
+/* ── thinking: eyes glance up + "..." ── */
+.eve[data-mood="thinking"] .eve-eye { height: 20%; top: 34%; animation: none; }
+.eve[data-mood="thinking"] .eve-hi { top: 6%; }
+.eve[data-mood="thinking"] .eve-mouth { width: 11%; height: 7%; }
+.eve[data-mood="thinking"] .eve-dots { display: block; animation: eve-dots 1.2s infinite; }
+@keyframes eve-dots { 0%, 100% { opacity: .3; } 50% { opacity: 1; } }
+
+/* ── happy: ^_^ eyes, wide smile, sparkle ── */
 .eve[data-mood="happy"] .eve-eye {
-  animation: eve-blink 5.2s infinite, eve-squint .3s ease forwards;
+  height: 12%; top: 46%;
+  background: transparent;
+  border-bottom: 4px solid #3a2d3a;
+  border-radius: 0 0 60% 60%;
+  animation: none; overflow: visible;
 }
-@keyframes eve-squint { to { height: calc(var(--eye-h) * .6); border-radius: 50% 50% 60% 60%; } }
+.eve[data-mood="happy"] .eve-hi,
+.eve[data-mood="happy"] .eve-hi2 { display: none; }
+.eve[data-mood="happy"] .eve-mouth {
+  width: 24%; height: 19%;
+  background: linear-gradient(#fff 0 40%, #9a3b54 40%);
+  border: 0; border-radius: 0 0 55% 55%;
+}
+.eve[data-mood="happy"] .eve-spark { display: block; animation: eve-dots 1s infinite; }
 
-.eve[data-mood="thinking"] .eve-mouth path { d: path("M 4 4 Q 11 2 18 4"); }
-.eve[data-mood="thinking"] .eve-avatar {
-  animation: eve-breath 3.6s ease-in-out infinite, eve-tilt 3s ease-in-out infinite;
-}
-@keyframes eve-tilt { 0%, 100% {} 50% { rotate: -2deg; } }
-
-.eve[data-mood="talking"] .eve-mouth { height: 14px; }
-.eve[data-mood="talking"] .eve-mouth path {
-  d: path("M 2 4 Q 11 11 20 4 Q 11 8 2 4 Z");
-  fill: #3d1f2a; stroke: #1a0d12;
-  animation: eve-talk .26s ease-in-out infinite alternate;
-}
-@keyframes eve-talk {
-  0%   { d: path("M 2 4 Q 11 5 20 4 Q 11 6 2 4 Z"); }
-  100% { d: path("M 2 3 Q 11 13 20 3 Q 11 9 2 3 Z"); }
+/* ── concerned (warroom-only): brows angled in-and-down, mouth turned down ── */
+.eve[data-mood="concerned"] .eve-brow.l { top: 21%; transform: rotate(10deg); }
+.eve[data-mood="concerned"] .eve-brow.r { top: 21%; transform: rotate(-10deg); }
+.eve[data-mood="concerned"] .eve-eye { height: 21%; top: 40%; }
+.eve[data-mood="concerned"] .eve-mouth {
+  top: 68%; width: 15%; height: 8%;
+  border-bottom: 0; border-top: 3px solid #b56b7e;
+  border-radius: 70% 70% 0 0;
 }
 
-.eve[data-mood="surprise"] .eve-mouth { height: 14px; width: 14px; }
-.eve[data-mood="surprise"] .eve-mouth path {
-  d: path("M 4 4 Q 7 12 11 12 Q 15 12 18 4 Q 11 0 4 4 Z");
-  fill: #3d1f2a;
+/* ── surprise (warroom-only): brows up, eyes round and wide, small "o" ── */
+.eve[data-mood="surprise"] .eve-brow.l { top: 5%; transform: rotate(-4deg); }
+.eve[data-mood="surprise"] .eve-brow.r { top: 5%; transform: rotate(4deg); }
+.eve[data-mood="surprise"] .eve-eye {
+  height: 34%; top: 30%; border-radius: 50%; animation: none;
 }
-.eve[data-mood="surprise"] .eve-eye { height: calc(var(--eye-h) * 2); }
+.eve[data-mood="surprise"] .eve-mouth {
+  width: 10%; height: 15%;
+  background: linear-gradient(#7d2c45 0 62%, #d0687f 62%);
+  border: 0; border-radius: 50%;
+}
 
-.eve[data-mood="concerned"] .eve-mouth path { d: path("M 2 4 Q 11 0 20 4"); }
+/* ── respect prefers-reduced-motion ──
+   No blinking, no mouth bounce, no drifting layers. The talking mouth stays
+   held open so "Eve is speaking" is still legible without movement. */
+@media (prefers-reduced-motion: reduce) {
+  .eve-avatar,
+  .eve-layer-head, .eve-layer-torso, .eve-layer-lower,
+  .eve-face, .eve-eye { animation: none !important; }
+  .eve[data-mood="talking"] .eve-mouth { animation: none; height: 14%; }
+  .eve[data-mood="thinking"] .eve-dots,
+  .eve[data-mood="happy"] .eve-spark { animation: none; }
+}
 
 /* ============ HEADER STRIP ============ */
 .eve-head {

@@ -117,9 +117,15 @@ export default function LoginPage() {
             Eve รออยู่ใน War Room — ล็อกอินเพื่อเริ่มกะ Eve จะคอยสรุปคิว ตอบคำถาม
             และช่วยพี่จัดการคำสั่งด้วยเสียงค่ะ
           </div>
+          {/* Was: a mystic "v0.7 · Groq Llama 3.3 70b" pill and a green
+              "● ออนไลน์" pill — both hardcoded. On the login screen there is no
+              token yet, so nothing can be known about Eve's health, and the
+              model is whichever provider the AI pool picks at call time, not a
+              fixed one. The /eve page dropped the same two fabrications in
+              favour of useEveHealth(); this is the honest equivalent for a
+              screen that genuinely has no connection to report. */}
           <div className="flex items-center gap-2 mt-3">
-            <Pill tone="mystic">v0.7 · Groq Llama 3.3 70b</Pill>
-            <Pill tone="ok">● ออนไลน์</Pill>
+            <Pill tone="dim">● ยังไม่ได้เชื่อมต่อ</Pill>
           </div>
         </footer>
       </section>
