@@ -271,6 +271,37 @@ input:focus, select:focus, textarea:focus {
   50%     { box-shadow: inset 0 0 0 2px rgba(239,68,68,.90), inset 0 0 120px rgba(239,68,68,.22); }
 }
 
+/* 🔔 (2026-09-06) LED ring — wraps a multi-view card whose customer is picking
+   a package RIGHT NOW. Louder than the plain hot-stage glow on purpose: this is
+   the one card an operator must open immediately, so it reads from across the
+   room. Colour comes from the inline --led var (the stage colour). Drawn on a
+   pseudo-element outside the card box → no layout shift, no repaint of the card
+   content, and it can't cover the tile's own buttons (pointer-events:none). */
+.led-ring { position: relative; }
+.led-ring::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  /* card is rounded-lg (8px) + 3px of outset */
+  border-radius: 11px;
+  border: 2px solid var(--led, #eab308);
+  pointer-events: none;
+  animation: ledring 1.2s ease-in-out infinite;
+}
+@keyframes ledring {
+  0%, 100% { opacity: .45; box-shadow: 0 0 5px var(--led, #eab308), inset 0 0 5px var(--led, #eab308); }
+  50%      { opacity: 1;   box-shadow: 0 0 16px var(--led, #eab308), inset 0 0 10px var(--led, #eab308); }
+}
+/* An operator who asked the OS for less motion still needs to SEE the card —
+   keep the ring, drop the pulsing. */
+@media (prefers-reduced-motion: reduce) {
+  .led-ring::after {
+    animation: none;
+    opacity: .95;
+    box-shadow: 0 0 10px var(--led, #eab308);
+  }
+}
+
 .focus-dim .panel:not(.focus-keep) { opacity:.28; transition: opacity .2s; }
 
 .toast {

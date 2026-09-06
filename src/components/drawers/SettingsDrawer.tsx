@@ -1224,11 +1224,24 @@ function NotifTab() {
           <Switch checked={n.mood5Instant} onChange={(v) => setN({ mood5Instant: v })} />
           <span className="text-fg">แจ้งเตือนเคส mood 5 ทันที</span>
         </label>
+        <label className="flex items-center gap-2">
+          <Switch
+            checked={n.packageChoiceAlert !== false}
+            onChange={(v) => setN({ packageChoiceAlert: v })}
+          />
+          <span className="text-fg">🔔 ลูกค้าถามดูดวง · กำลังเลือกแพ็กเกจ</span>
+        </label>
       </div>
       <p className="text-2xs text-mute mt-3 pt-2 border-t border-line leading-relaxed">
         เด้งจริงเมื่อมี <span className="text-crit">เคสวิกฤตใหม่</span> (อ่านสัญญาณระบบทุก 30 วิ) —
         เสียงใช้โปรไฟล์จากแท็บ <span className="text-fg">"เสียง"</span> และเงียบเมื่อกด mute ·
         desktop notification ต้องเปิดแท็บ War Room ค้างไว้
+      </p>
+      <p className="text-2xs text-mute mt-2 leading-relaxed">
+        🔔 <span className="text-fg">ลูกค้าเลือกแพ็กเกจ</span> = เสียง<span className="text-fg">คนละแบบ</span>
+        (เสียงระฆังไล่ขึ้น 3 โน้ต) ดังทันทีที่มีลูกค้าถามดูดวงแล้วกำลังเลือก 39/99 —
+        จะได้ทักกลับปิดการขายทัน · การ์ดของลูกค้าคนนั้นจะมี<span className="text-fg">ไฟ LED ล้อม</span>
+        ในหน้าแชทโหมดมัลติ · เตือนคนละคูลดาวน์ 10 นาทีต่อลูกค้า 1 คน
       </p>
     </section>
   );

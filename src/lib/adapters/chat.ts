@@ -30,6 +30,19 @@ export const STAGE_META: Record<ChatStage, { label: string; icon: string; prio: 
  *  customer killing their own bill is a hot revenue-loss alert.) */
 export const COLD_STAGES: ChatStage[] = ['delivered', 'declined', 'cancelled_system', 'idle'];
 
+/** 🔔 (2026-09-06) Stages that deserve their OWN alert — sound + an LED ring
+ *  around the multi-view card — because a human replying right now is what
+ *  closes the sale: the customer has asked for a reading and is choosing a
+ *  package (conversation_status tier_choice / discovery_chat / discovery_confirm
+ *  → 'choosing'). Deliberately NOT the whole hot half of the funnel: a card
+ *  that lights up every few seconds stops being an alert.
+ *  Add 'upsell' here to include free_predicted (ดูฟรีแล้ว · รอตัดสินใจซื้อ). */
+export const ALERT_STAGES: ChatStage[] = ['choosing'];
+
+export function isAlertStage(s: ChatStage): boolean {
+  return ALERT_STAGES.includes(s);
+}
+
 // conversation_status → stage. Verified 1:1 against the backend state machine
 // (Thaiprompt-Affiliate app/Models/FortuneReading.php STATUS_* constants). Every
 // known status maps explicitly; only a NEW/unknown backend status falls through

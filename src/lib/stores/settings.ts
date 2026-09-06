@@ -29,6 +29,11 @@ export type NotificationRules = {
   soundOnCritical: boolean;
   desktopNotification: boolean;
   mood5Instant: boolean;
+  /** 🔔 (2026-09-06) Its OWN alert (rising chime + toast), separate from the
+   *  critical beep: a customer asked for a reading and is picking a package
+   *  (tier_choice / discovery) — the moment an admin replying by hand closes
+   *  the sale. Fired from the chat page's live funnel, not from eve-signals. */
+  packageChoiceAlert: boolean;
 };
 
 export type SoundConfig = {
@@ -138,6 +143,7 @@ const DEFAULT_NOTIFICATIONS: NotificationRules = {
   soundOnCritical: true,
   desktopNotification: true,
   mood5Instant: false,
+  packageChoiceAlert: true,
 };
 
 const DEFAULT_SOUND: SoundConfig = {
@@ -312,7 +318,7 @@ export const useSettings = create<SettingsState>()(
     {
       name: 'warroom-settings.v1',
       storage: createJSONStorage(() => localStorage),
-      version: 6,
+      version: 7,
       // v1 predates eve.voice/eve.safety; v3 adds eve.safety.autoManage. Normalize
       // the eve config against current defaults so older payloads never leave a
       // nested field undefined (EveChatBody/actions read safety.autoManage etc.).
@@ -364,6 +370,13 @@ export const useSettings = create<SettingsState>()(
             ...p.eve,
             voice: { ...p.eve.voice, speak: { ...p.eve.voice.speak, enabled: true } },
           };
+        }
+        // v7: `notifications` gained packageChoiceAlert. persist merges the
+        // stored object WHOLE (shallow), so an older payload would leave the new
+        // key undefined → the sales alert would arrive switched off for every
+        // existing operator, silently. Normalize against the defaults.
+        if (fromVersion < 7) {
+          p.notifications = { ...DEFAULT_NOTIFICATIONS, ...(p.notifications ?? {}) };
         }
         return p as SettingsState;
       },

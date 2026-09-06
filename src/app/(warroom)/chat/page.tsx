@@ -11,9 +11,18 @@ import { Kbd } from '@/components/ui/Kbd';
 import { useWarroom } from '@/lib/stores/warroom';
 import { useFortuneFeed, FORTUNE_FEED_PAGE_SIZE, fetchWallets, usePayoutAccount, sendChatMessage, suggestChatReply, fetchReadingTranscript, fetchFortuneWorkersQueue, fetchBanStatus, banUser, unbanUser, markReadingPaid, fetchUserReadings, takeoverChat, resumeChatBot, fetchChatTakeoverStatus, useAdminData, describeError, type ReadingTranscriptMessage, type FortuneWorkersQueue, type WorkerCallRow, type BanStatusResponse, type ChatTakeoverStatus } from '@/lib/api';
 import { useSettings, isPaired as isPairedFn } from '@/lib/stores/settings';
-import { readingToChatThread, STAGE_META, COLD_STAGES, rarityForLtv, levelForLtv } from '@/lib/adapters/chat';
+import { readingToChatThread, STAGE_META, COLD_STAGES, ALERT_STAGES, isAlertStage, rarityForLtv, levelForLtv } from '@/lib/adapters/chat';
+import { playSalesAlertSound, fireDesktopNotification } from '@/lib/alerts';
 import { CreditModal } from '@/components/warroom/CreditModal';
 import { cn } from '@/lib/utils';
+
+// 🔔 (2026-09-06) At most one sales ping per customer per this window. A person
+//   walking tier_choice → collecting → tier_choice, or a card that drops out of
+//   the 30-row feed window and comes straight back, must not turn into a siren.
+const SALES_ALERT_COOLDOWN_MS = 10 * 60 * 1000;
+/** Colour of the LED ring / alert chip — the stage's own colour, so the ring and
+ *  the funnel chip can never drift apart. */
+const ALERT_COLOR = STAGE_META[ALERT_STAGES[0] ?? 'choosing'].color;
 
 // Static-export builds require useSearchParams() to be inside a Suspense
 // boundary so the CSR-bailout has somewhere to fall through.
@@ -44,7 +53,9 @@ function ChatPageInner() {
   //   funnel stage (เลือกไพ่ / กำลังทำนาย / รอตัดสินใจจ่าย / รอคำทำนาย). Hot
   //   stages auto-surface to the top; click a tile to drop into single-chat.
   const [viewMode, setViewMode] = useState<'single' | 'multi'>('single');
-  const [stageFilter, setStageFilter] = useState<ChatStage | ''>('');
+  // '' = ทั้งหมด · '__alert' = เฉพาะลูกค้าที่กำลังเลือกแพ็กเกจ (ALERT_STAGES —
+  //   a pseudo-filter so the 🔔 chip keeps working if more stages are added).
+  const [stageFilter, setStageFilter] = useState<ChatStage | '' | '__alert'>('');
 
   // 🪪 (2026-05-24) Deep-link target from /workers → /chat?thread=r-{id}|fb-{psid}
   //   Read once on mount + whenever it changes. Falls through to the first
@@ -136,6 +147,15 @@ function ChatPageInner() {
   const [suggesting, setSuggesting] = useState(false);
   const pushToast = useWarroom((s) => s.pushToast);
   const paired = useSettings((s) => isPairedFn(s));
+  // 🔔 Sales-alert plumbing. Its own switch (Settings → Notifications, mirrored
+  //   by the bell in the multi header) so an operator can silence package pings
+  //   while keeping the critical beep — and vice versa. `muted` is the global
+  //   mute in the top bar: it kills the SOUND only, the toast still lands.
+  const muted = useWarroom((s) => s.muted);
+  const soundVolume = useSettings((s) => s.sound.volume);
+  const desktopNotify = useSettings((s) => s.notifications.desktopNotification);
+  const salesAlertOn = useSettings((s) => s.notifications.packageChoiceAlert !== false);
+  const setNotifications = useSettings((s) => s.setNotifications);
   // 💳 The account the BOT is collecting into right now. Fetched, never
   //   hardcoded — an admin can re-tick it in admin web and warroom must not go
   //   on quoting the old number. Shares a cache key with /bills.
@@ -398,6 +418,11 @@ function ChatPageInner() {
     return c;
   }, [staged]);
 
+  // 🔔 How many CUSTOMERS are picking a package right now — drives the alert
+  //   chip in the multi header (and tells the operator the LED cards exist even
+  //   when they are scrolled out of view).
+  const alertCount = useMemo(() => staged.filter((s) => isAlertStage(s.stage)).length, [staged]);
+
   // ⏱️ (2026-06-12) ETA for the live countdown on predicting tiles — median
   //   latency of recent completed calls, per provider (overall as fallback).
   const predictEta = useMemo(() => {
@@ -430,17 +455,43 @@ function ChatPageInner() {
   // shifts) — so the crit toast fires exactly once per real customer transition.
   const prevStagesRef = useRef<Record<string, ChatStage>>({});
   const [flashIds, setFlashIds] = useState<Set<string>>(() => new Set());
+  // ⏲️ One expiry timer PER flashing card, held in a ref.
+  //   The timer used to live in the effect's cleanup — and `staged` gets a new
+  //   identity on every 3s poll, so the cleanup cleared the pending timeout and
+  //   the next run returned early (nothing newly hot) without arming a new one.
+  //   Net effect: a card that flashed once kept pulsing forever, and after a busy
+  //   hour half the grid was "urgent". Per-key timers survive effect re-runs.
+  const flashTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  // 🔔 customerKey → epoch ms of the last sales ping, for the cooldown above.
+  const salesAlertedRef = useRef<Map<string, number>>(new Map());
+  // The browser blocks audio until this tab has had a user gesture. Say so ONCE
+  // instead of letting the operator believe the queue is quiet.
+  const audioBlockedNotedRef = useRef(false);
   useEffect(() => {
     const prev = prevStagesRef.current;
     const isFirstPass = Object.keys(prev).length === 0;
     const next: Record<string, ChatStage> = {};
     const newlyHot: string[] = [];
+    const newlyChoosing: ChatThread[] = [];
     for (const { t, stage } of staged) {
       const key = t.customerKey;
       next[key] = stage;
       // Only flash on entering a genuinely HOT stage. Cold/finished cards
       // (delivered/declined/cancelled_system/idle) never pulse — they're done.
       if (stage !== prev[key] && !COLD_STAGES.includes(stage)) newlyHot.push(key);
+      // 🔔 Customer just asked for a reading and is picking a package — the
+      // moment a human reply closes the sale. Unlike the cancel toast below, a
+      // customer we have NEVER seen counts: a brand-new card that shows up
+      // already in 'choosing' is exactly the conversation to answer. Only the
+      // very first snapshot is silenced (otherwise every page load would alarm
+      // for the whole grid).
+      if (
+        !isFirstPass &&
+        isAlertStage(stage) &&
+        !(prev[key] !== undefined && isAlertStage(prev[key]))
+      ) {
+        newlyChoosing.push(t);
+      }
       // 🚨 Customer just killed their own bill — revenue walking out the door.
       // Crit toast so the operator can chase immediately. Only on a REAL
       // transition (customer was already tracked, not the initial snapshot).
@@ -453,17 +504,69 @@ function ChatPageInner() {
       }
     }
     prevStagesRef.current = next;
+
+    // ── 🔔 Sales alert: own sound, own toast, own notification tag ──────────
+    if (newlyChoosing.length > 0 && salesAlertOn) {
+      const nowMs = Date.now();
+      const seen = salesAlertedRef.current;
+      const fresh = newlyChoosing.filter(
+        (t) => nowMs - (seen.get(t.customerKey) ?? 0) > SALES_ALERT_COOLDOWN_MS,
+      );
+      for (const t of fresh) seen.set(t.customerKey, nowMs);
+      // Bound the map — customers churn out of the feed window all day.
+      for (const [k, ts] of seen) if (nowMs - ts > SALES_ALERT_COOLDOWN_MS * 4) seen.delete(k);
+      if (fresh.length > 0) {
+        // One ping for the whole tick: five customers arriving together must not
+        // stack five chimes on top of each other.
+        const title =
+          fresh.length === 1
+            ? `🔔 ${fresh[0].name} กำลังเลือกแพ็กเกจ`
+            : `🔔 ลูกค้า ${fresh.length} คนกำลังเลือกแพ็กเกจ`;
+        const body = 'ถามดูดวงแล้ว — ทักกลับทันทีเพื่อปิดการขาย · การ์ดมีไฟล้อมในมัลติวิว';
+        if (!muted) {
+          const played = playSalesAlertSound(soundVolume);
+          if (!played && !audioBlockedNotedRef.current) {
+            audioBlockedNotedRef.current = true;
+            pushToast({
+              kind: 'info',
+              title: '🔇 เบราว์เซอร์ยังบล็อกเสียงอยู่',
+              body: 'คลิกที่หน้าเว็บสักครั้ง แล้วเสียงเตือนรอบต่อไปจะดัง',
+            });
+          }
+        }
+        pushToast({ kind: 'warn', title, body });
+        if (desktopNotify) fireDesktopNotification(title, body, 'warroom-package-choice');
+      }
+    }
+
     if (newlyHot.length === 0) return;
     setFlashIds((s) => new Set([...s, ...newlyHot]));
-    const timer = setTimeout(() => {
-      setFlashIds((s) => {
-        const n = new Set(s);
-        for (const id of newlyHot) n.delete(id);
-        return n;
-      });
-    }, 6000);
-    return () => clearTimeout(timer);
-  }, [staged, pushToast]);
+    for (const key of newlyHot) {
+      const running = flashTimersRef.current.get(key);
+      if (running) clearTimeout(running); // re-entered while still flashing → restart
+      flashTimersRef.current.set(
+        key,
+        setTimeout(() => {
+          flashTimersRef.current.delete(key);
+          setFlashIds((s) => {
+            if (!s.has(key)) return s;
+            const n = new Set(s);
+            n.delete(key);
+            return n;
+          });
+        }, 6000),
+      );
+    }
+  }, [staged, pushToast, salesAlertOn, muted, soundVolume, desktopNotify]);
+
+  // Leaving the page mid-flash must not leave timers running.
+  useEffect(() => {
+    const timers = flashTimersRef.current;
+    return () => {
+      for (const t of timers.values()) clearTimeout(t);
+      timers.clear();
+    };
+  }, []);
 
   // 📜 Real recent-reading history for the active customer's sidebar — replaces
   //    the old hardcoded list + the fabricated "ดูดวงทั้งหมด" count. Fetched by
@@ -935,6 +1038,37 @@ function ChatPageInner() {
             >
               ลูกค้า {staged.length}
             </button>
+            {/* 🔔 (2026-09-06) The chip that means "someone is buying": jumps
+                straight to the customers who asked for a reading and are picking
+                a package. It pulses only while such a customer exists. */}
+            <button
+              onClick={() => setStageFilter((cur) => (cur === '__alert' ? '' : '__alert'))}
+              className={cn(
+                'pill',
+                stageFilter === '__alert' ? 'pill-warn' : 'pill-dim',
+                alertCount > 0 && 'animate-pulse',
+              )}
+              style={alertCount > 0 ? { borderColor: ALERT_COLOR + 'cc', color: ALERT_COLOR } : undefined}
+              title="ลูกค้าที่ถามดูดวงแล้วกำลังเลือกแพ็กเกจ — ทักกลับทันทีเพื่อปิดการขาย"
+            >
+              🔔 กำลังเลือกแพ็กเกจ {alertCount}
+            </button>
+            {/* Same switch as Settings → Notifications, put where the operator
+                actually is. Global mute silences the sound too — say so instead
+                of showing a bell that quietly does nothing. */}
+            <button
+              onClick={() => setNotifications({ packageChoiceAlert: !salesAlertOn })}
+              className={cn('pill', salesAlertOn && !muted ? 'pill-ok' : 'pill-dim')}
+              title={
+                salesAlertOn
+                  ? muted
+                    ? 'เปิดเสียงเตือนอยู่ แต่ระบบถูก mute รวม — จะขึ้นเฉพาะข้อความแจ้งเตือน'
+                    : 'เสียงเตือนเฉพาะตอนลูกค้าเลือกแพ็กเกจ (คนละเสียงกับเคสวิกฤต) — กดเพื่อปิด'
+                  : 'ปิดเสียง/แจ้งเตือนตอนลูกค้าเลือกแพ็กเกจอยู่ — กดเพื่อเปิด'
+              }
+            >
+              {salesAlertOn ? (muted ? '🔔 เสียงเตือน (mute รวม)' : '🔔 เสียงเตือน') : '🔕 ปิดเตือน'}
+            </button>
             {(Object.keys(STAGE_META) as ChatStage[]).map((s) => (
               <button
                 key={s}
@@ -954,11 +1088,19 @@ function ChatPageInner() {
           </header>
           <div className="flex-1 overflow-y-auto p-3 min-h-0 scanline">
             {(() => {
-              const shown = staged.filter((s) => !stageFilter || s.stage === stageFilter);
+              const shown = staged.filter((s) =>
+                !stageFilter
+                  ? true
+                  : stageFilter === '__alert'
+                  ? isAlertStage(s.stage)
+                  : s.stage === stageFilter,
+              );
               if (shown.length === 0) {
                 return (
                   <div className="grid place-items-center h-full text-mute text-sm">
-                    {stageFilter
+                    {stageFilter === '__alert'
+                      ? 'ตอนนี้ไม่มีลูกค้าที่กำลังเลือกแพ็กเกจ'
+                      : stageFilter
                       ? `ไม่มีแชตในขั้น "${STAGE_META[stageFilter].label}" ตอนนี้`
                       : 'ยังไม่มีแชต'}
                   </div>
@@ -985,6 +1127,10 @@ function ChatPageInner() {
                           : null
                       }
                       flash={flashIds.has(t.customerKey)}
+                      // 💡 LED ring — stage-driven, not event-driven: it stays lit
+                      // for as long as the customer is actually choosing, so a card
+                      // that scrolls into view is still marked.
+                      alert={isAlertStage(stage)}
                       // approveId is non-null only when the group holds a LIVE
                       // unpaid bill — the grouping already excluded cancelled
                       // rows, which are terminal COMPLETED records: mark-paid
@@ -1915,6 +2061,7 @@ function MultiTile({
   workerProvider,
   predict,
   flash,
+  alert,
   canApprove,
   onOpen,
   onApprove,
@@ -1927,6 +2074,8 @@ function MultiTile({
   /** Live prediction timing — age at fetch + when fetched + median ETA. */
   predict: { ageSec: number; fetchedAt: number; etaSec: number | null } | null;
   flash: boolean;
+  /** 🔔 Customer is picking a package — wrap the card in the LED ring. */
+  alert: boolean;
   canApprove: boolean;
   onOpen: () => void;
   onApprove: () => void;
@@ -1969,12 +2118,19 @@ function MultiTile({
       className={cn(
         'text-left rounded-lg border bg-panel p-2.5 cursor-pointer transition-colors hover:bg-rowhi flex flex-col gap-1.5',
         flash && 'animate-pulse',
+        // 💡 The LED ring lives on a ::after pseudo-element (globals.css) so it
+        //   sits OUTSIDE the card box — no layout shift, and it never covers the
+        //   tile's own buttons.
+        alert && 'led-ring',
       )}
-      style={{
-        borderColor: hot ? meta.color + '66' : undefined,
-        boxShadow: hot ? `0 0 10px ${meta.color}22` : undefined,
-      }}
-      title="กดเพื่อเปิดแชทนี้"
+      style={
+        {
+          borderColor: hot ? meta.color + '66' : undefined,
+          boxShadow: hot ? `0 0 10px ${meta.color}22` : undefined,
+          '--led': meta.color,
+        } as React.CSSProperties
+      }
+      title={alert ? 'ลูกค้ากำลังเลือกแพ็กเกจ — กดเพื่อทักกลับทันที' : 'กดเพื่อเปิดแชทนี้'}
     >
       <div className="flex items-center gap-1.5 min-w-0">
         <ChannelChip channel={t.channel === 'LINE' ? 'line' : 'fb'} />
@@ -1999,7 +2155,7 @@ function MultiTile({
           color: meta.color,
         }}
       >
-        {stage === 'predicting' && (
+        {(stage === 'predicting' || alert) && (
           <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: meta.color, boxShadow: `0 0 4px ${meta.color}` }} />
         )}
         <span className="font-semibold">
@@ -2014,6 +2170,15 @@ function MultiTile({
       <div className="text-2xs text-dim line-clamp-2 break-words flex-1">{t.last}</div>
 
       <div className="flex items-center gap-1.5">
+        {alert && (
+          <span
+            className="text-2xs font-semibold shrink-0"
+            style={{ color: meta.color }}
+            title="ยังไม่มีบิล — ลูกค้ากำลังตัดสินใจว่าจะเอาแพ็กเกจไหน"
+          >
+            🔔 ทักกลับด่วน
+          </span>
+        )}
         {t.due > 0 && (
           <span className="text-2xs text-warn mono shrink-0">บิล {thb(t.due)}</span>
         )}
