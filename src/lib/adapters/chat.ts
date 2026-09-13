@@ -82,6 +82,11 @@ const CS_STAGE: Record<string, ChatStage> = {
   free_declined: 'declined',
 };
 
+/** Bill rejected from the SMS Checker app — raw conversation_status 'cancelled', unpaid. */
+function isRejectedBill(r: FortuneReading): boolean {
+  return (r.conversation_status ?? '').toLowerCase() === 'cancelled' && !r.is_paid;
+}
+
 function looksCeltic(r: FortuneReading): boolean {
   return (
     (r.response_type ?? '').toLowerCase().includes('celtic') ||
@@ -109,6 +114,12 @@ export function stageOfReading(r: FortuneReading): ChatStage {
   }
   // 2. Exact stage from the backend's conversation_status when present.
   const cs = (r.conversation_status ?? '').toLowerCase();
+  // 🚫 (2026-09-13) Raw 'cancelled' = the SMS Checker app rejected this bill
+  //    (Thaiprompt SmsPaymentController writes it directly — it is NOT a
+  //    FortuneReading::STATUS_* and isCancelled() ignores it, so `cancellation`
+  //    is null). Without this it fell through to inference and an admin-rejected
+  //    bill showed as "รอชำระเงิน". Mirrors FortuneFunnelStage::REJECTED_STATUS.
+  if (isRejectedBill(r)) return 'cancelled_system';
   if (cs && CS_STAGE[cs]) return CS_STAGE[cs];
   // 3. Fallback inference (older backend / unknown status) — keyed off the
   //    structural payment/response shape, NOT reading_type string literals
@@ -131,6 +142,7 @@ export function stageOfReading(r: FortuneReading): ChatStage {
  */
 export function stageDetailOf(r: FortuneReading): string | undefined {
   if (r.cancellation) return undefined; // pinReason already says why
+  if (isRejectedBill(r)) return 'ปฏิเสธบิลจากแอป SMS Checker';
   const cs = (r.conversation_status ?? '').toLowerCase();
   const picked = r.celtic_picked_count ?? null;
   const usedQ = r.celtic_questions_used ?? 0;
@@ -268,6 +280,8 @@ export function readingToChatThread(r: FortuneReading): ChatThread {
       ? r.cancellation.reason === 'user_cancelled'
         ? '🚨 ลูกค้ายกเลิกบิลเอง'
         : '❌ ' + (r.cancellation.label ?? 'ยกเลิกโดยระบบ')
+      : isRejectedBill(r)
+      ? '❌ ปฏิเสธบิลจากแอป'
       : !r.is_paid && r.amount_paid > 0
       ? `💰 บิล ฿${r.amount_paid.toLocaleString()}` +
         (productLabel(r.reading_type) ? ` · ${productLabel(r.reading_type)}` : '')
