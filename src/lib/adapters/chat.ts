@@ -248,6 +248,7 @@ export function readingToChatThread(r: FortuneReading): ChatThread {
     openedAt,
     stage: stageOfReading(r),
     stageDetail: stageDetailOf(r),
+    rejectedBill: isRejectedBill(r),
     lastTsMs: parseMs(r.responded_at) ?? parseMs(r.paid_at) ?? parseMs(r.created_at) ?? 0,
     bot,
     sentiment,

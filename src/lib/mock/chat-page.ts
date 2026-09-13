@@ -65,6 +65,11 @@ export type ChatThread = {
   //   card (e.g. "เปิดไพ่ 7/10", "เปิดไพ่ครบ · รอวันเกิด"). undefined → use the
   //   coarse STAGE_META label.
   stageDetail?: string;
+  /** 🚫 (2026-09-13) Bill rejected from the SMS Checker app (raw status 'cancelled').
+   *  Shown as cancelled, but STILL approvable: unlike a real cancellation
+   *  (status 'completed'), the backend's mark-paid trigger does not skip this
+   *  status, so approving it delivers the reading (admin mis-reject / late payer). */
+  rejectedBill?: boolean;
   lastTsMs?: number;
   bot: boolean;
   takenBy?: { initial: string; color: string };

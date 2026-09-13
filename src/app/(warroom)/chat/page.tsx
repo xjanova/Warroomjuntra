@@ -273,14 +273,17 @@ function ChatPageInner() {
   //   short-circuits on conversation_status='completed' (which every cancelled
   //   reading carries), so marking one paid records the money and delivers
   //   nothing — while both the API message and our toast claim success.
+  //   Exception: a bill rejected from the SMS Checker app (raw status
+  //   'cancelled') shows as cancelled but the trigger does NOT skip it —
+  //   approving it delivers the reading, so it stays approvable.
   const canApproveActive =
     paired &&
     !!active &&
     active.isPaid === false &&
     active.due > 0 &&
     readingIdOf(active.id) != null &&
-    activeStage !== 'cancelled_user' &&
-    activeStage !== 'cancelled_system';
+    (active.rejectedBill === true ||
+      (activeStage !== 'cancelled_user' && activeStage !== 'cancelled_system'));
 
   // 🧑‍🤝‍🧑 (2026-06-18) Collapse the many readings of one person into ONE card —
   //   fixes the "same customer shows up as many cards" bug. Grouped by the stable,
@@ -337,8 +340,9 @@ function ChatPageInner() {
           (m) =>
             m.t.isPaid === false &&
             m.t.due > 0 &&
-            m.stage !== 'cancelled_user' &&
-            m.stage !== 'cancelled_system',
+            // SMS-Checker-rejected bills stay approvable (see canApproveActive)
+            (m.t.rejectedBill === true ||
+              (m.stage !== 'cancelled_user' && m.stage !== 'cancelled_system')),
         )
         .sort(byRecency)[0];
       const ltv = members.reduce((s, m) => s + (m.t.ltv || 0), 0);
@@ -1249,6 +1253,7 @@ function ChatPageInner() {
               {paired &&
                 active.isPaid === false &&
                 active.due > 0 &&
+                active.rejectedBill !== true &&
                 (activeStage === 'cancelled_user' || activeStage === 'cancelled_system') && (
                   <span
                     className="pill pill-dim border-dashed shrink-0"
