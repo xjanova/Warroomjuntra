@@ -16,6 +16,7 @@ import {
   type SmsInboxItem,
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { isRejectedBill } from '@/lib/adapters/chat';
 import {
   startListening,
   speak as ttsSpeak,
@@ -108,7 +109,12 @@ async function gatherRecords(): Promise<EveRecords> {
       min: ageMin(r.created_at),
     });
     const stuck = rows.filter((r) => r.is_paid && !r.ai_response && !r.cancellation);
-    const bills = rows.filter((r) => !r.is_paid && r.amount_paid > 0 && !r.cancellation);
+    // A bill rejected from the SMS Checker app (raw status 'cancelled') has no
+    //   `cancellation` object but is not a live bill either — the chat page shows
+    //   it as cancelled, so Eve must not chase it as unpaid.
+    const bills = rows.filter(
+      (r) => !r.is_paid && r.amount_paid > 0 && !r.cancellation && !isRejectedBill(r),
+    );
     if (stuck.length) out.readings_stuck = stuck.slice(0, 5).map(compact);
     if (bills.length) out.bills_unpaid = bills.slice(0, 5).map(compact);
   }

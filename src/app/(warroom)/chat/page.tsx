@@ -124,6 +124,13 @@ function ChatPageInner() {
     }
 
     if (!threads.find((c) => c.id === activeId)) {
+      // The open reading dropped out of the feed window (newer readings pushed
+      //   it past FORTUNE_FEED_PAGE_SIZE). Any action modal still open was bound
+      //   to THAT customer — left open it would re-render for threads[0] and a
+      //   click would approve / ban / credit the wrong person.
+      setApproveOpen(false);
+      setBanModalOpen(false);
+      setCreditOpen(false);
       setActiveId(threads[0]?.id ?? '');
     }
     // resolveDeepThread is referentially stable (pure local helper)

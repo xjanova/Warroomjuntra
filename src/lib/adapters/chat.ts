@@ -83,7 +83,7 @@ const CS_STAGE: Record<string, ChatStage> = {
 };
 
 /** Bill rejected from the SMS Checker app — raw conversation_status 'cancelled', unpaid. */
-function isRejectedBill(r: FortuneReading): boolean {
+export function isRejectedBill(r: FortuneReading): boolean {
   return (r.conversation_status ?? '').toLowerCase() === 'cancelled' && !r.is_paid;
 }
 

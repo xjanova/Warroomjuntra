@@ -73,8 +73,19 @@ export default function BillsPage() {
     return m ? Number(m[1]) : null;
   };
 
+  // Live bills carry a display id ("FB-0123") that readingIdFromBillId can't
+  //   resolve, so on prod `rid` is null. These handlers used to report that as a
+  //   success "(mock)" toast while nothing was sent. Say so honestly instead.
+  const notSent = (what: string, b: Bill) =>
+    pushToast({
+      kind: 'warn',
+      title: `${what}ไม่ได้ส่งไปหลังบ้าน`,
+      body: `${b.id} · หน้านี้ยังไม่ผูกกับรหัสดวงจริง — ทำผ่านห้องแชทหรือหลังบ้านแทน`,
+    });
+
   const doMarkPaid = async (b: Bill) => {
     const rid = readingIdFromBillId(b.id);
+    if (paired && !rid) return notSent('มาร์คจ่าย', b);
     if (!paired || !rid) {
       pushToast({ kind: 'ok', title: 'มาร์คจ่ายแล้ว (mock)', body: b.id });
       return;
@@ -90,6 +101,7 @@ export default function BillsPage() {
 
   const doRefund = async (b: Bill, reason?: string) => {
     const rid = readingIdFromBillId(b.id);
+    if (paired && !rid) return notSent('คืนเงิน', b);
     if (!paired || !rid) {
       pushToast({ kind: 'crit', title: 'ส่งเข้าคิวคืนเงิน (mock)', body: b.id });
       return;
@@ -105,6 +117,7 @@ export default function BillsPage() {
 
   const doCancel = async (b: Bill) => {
     const rid = readingIdFromBillId(b.id);
+    if (paired && !rid) return notSent('ยกเลิกบิล', b);
     if (!confirm(`ยกเลิกบิล ${b.id} (${b.customer} · ฿${b.amount.toLocaleString()}) ?`)) return;
     if (!paired || !rid) {
       pushToast({ kind: 'crit', title: 'ยกเลิกบิล (mock)', body: b.id });

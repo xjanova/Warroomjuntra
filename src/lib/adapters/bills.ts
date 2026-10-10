@@ -1,5 +1,6 @@
 import type { Bill, BillStatus } from '@/lib/mock/bills';
 import type { FortuneReading } from '@/lib/api';
+import { isRejectedBill } from './chat';
 
 /**
  * Map FortuneReading → Bill view.
@@ -19,8 +20,14 @@ export function readingToBill(r: FortuneReading): Bill {
       ? r.categories[0]
       : 'ดูดวง';
 
+  // Cancelled (cancellation object: cron / customer / void) and SMS-Checker-
+  //   rejected (raw status 'cancelled') bills are terminal — they used to fall
+  //   through to 'floating' (บิลลอย, crit) with a mark-paid button and a QR
+  //   carrying the amount, while /chat shows the same rows as cancelled.
   const status: BillStatus = r.is_paid
     ? 'paid'
+    : r.cancellation || isRejectedBill(r)
+    ? 'cancelled'
     : r.amount_paid > 0 && !r.responded_at
     ? 'floating'
     : 'open';
