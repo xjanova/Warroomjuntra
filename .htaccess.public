@@ -74,3 +74,11 @@
 # Prevent directory listing
 # ============================================================
 Options -Indexes
+
+# ============================================================
+# Keep repo files off the web — public_html is the repo checkout,
+# so deploy.sh, docs and logs sit next to the export.
+# ============================================================
+<FilesMatch "\.(md|sh|log)$">
+    Require all denied
+</FilesMatch>
